@@ -32,7 +32,13 @@ export function loadConfig(cwd: string = process.cwd()): Config {
   const home = homedir();
 
   // 1. Load global zencode.json (lowest file priority)
-  const globalPath = join(home, ".config", "zencode", "zencode.json");
+  let globalPath = join(home, ".config", "zencode", "zencode.json");
+  if (!existsSync(globalPath)) {
+    const fallbackPath = join(home, ".zencode", "zencode.json");
+    if (existsSync(fallbackPath)) {
+      globalPath = fallbackPath;
+    }
+  }
   let globalRaw: any = {};
   if (existsSync(globalPath)) {
     try {
@@ -123,10 +129,10 @@ export function loadConfig(cwd: string = process.cwd()): Config {
 
   // Auto-detect sensible default (respect file/env)
   if (provider === 'auto') {
-    if (cfAccountId && (cfToken || genericKey)) {
-      provider = 'cloudflare';
-    } else if (xaiKey) {
+    if (xaiKey) {
       provider = 'xai';
+    } else if (cfAccountId && (cfToken || genericKey)) {
+      provider = 'cloudflare';
     } else if (fileRaw.provider && Object.keys(fileRaw.provider).length > 0) {
       // pick first defined provider from file
       provider = Object.keys(fileRaw.provider)[0] as Provider;

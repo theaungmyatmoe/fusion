@@ -71,10 +71,21 @@ export class LLMClient {
     const { cloudflareAccountId, apiKey, model } = this.config;
 
     if (!cloudflareAccountId) {
-      throw new Error("CLOUDFLARE_ACCOUNT_ID is required when using Cloudflare Workers AI");
+      const cfgPath = (this.config as any)?.configPath;
+      throw new Error(
+        "CLOUDFLARE_ACCOUNT_ID is required when using Cloudflare Workers AI\n" +
+        (cfgPath ? `  (config file examined: ${cfgPath})\n` : "") +
+        "Tip: export CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN (or put them in ~/.config/zencode/zencode.json under provider.cloudflare.options) and restart your shell. " +
+        "Env vars take highest priority."
+      );
     }
     if (!apiKey) {
-      throw new Error("CLOUDFLARE_API_TOKEN (or ZENCODE_API_KEY) is required for Cloudflare");
+      const cfgPath = (this.config as any)?.configPath;
+      throw new Error(
+        "CLOUDFLARE_API_TOKEN (or ZENCODE_API_KEY) is required for Cloudflare\n" +
+        (cfgPath ? `  (config file examined: ${cfgPath})\n` : "") +
+        "Tip: export CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN (or put them in ~/.config/zencode/zencode.json under provider.cloudflare.options) and restart your shell."
+      );
     }
 
     const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/ai/run/${model}`;

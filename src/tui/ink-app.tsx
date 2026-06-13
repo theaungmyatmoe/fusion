@@ -100,9 +100,10 @@ export const InkApp: React.FC<Props> = ({ config, initialMessage }) => {
       const result = await llm.chat({ messages: llmMessages, temperature: 0.6 });
       addMessage({ role: 'assistant', content: result.content || '(no content)' });
     } catch (err: any) {
+      const m = err?.message || String(err);
       addMessage({
         role: 'assistant',
-        content: `LLM error: ${err?.message || err}\n\nTip: export CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN for default Kimi 2.7 route.`,
+        content: `LLM error: ${m}\n\n(If using the default Kimi route: put CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN in your shell profile or under provider.cloudflare.options in the loaded zencode.json. Env wins.)`,
       });
     }
 

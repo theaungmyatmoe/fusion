@@ -28,10 +28,26 @@ export class SimpleREPL {
     if ((this.cfg as any).configPath) {
       console.log(chalk.gray(`config: ${(this.cfg as any).configPath}`));
     }
+
+    // Pre-flight warning for the common case (global config + Cloudflare Kimi)
+    const c = this.cfg as any;
+    const needsCf = this.model.startsWith('@cf/') || c.provider === 'cloudflare' || this.model.includes('kimi');
+    if (needsCf && !c.cloudflareAccountId) {
+      console.log(chalk.yellow('⚠  No Cloudflare credentials found for the default Kimi route.'));
+      console.log(chalk.gray('   The reported config file was read but did not supply accountId/apiKey, and no matching env vars were present.'));
+      console.log(chalk.gray('   Fix options:'));
+      console.log(chalk.gray('     1. Add to your ~/.zshrc (or ~/.zprofile) and restart the terminal:'));
+      console.log(chalk.gray('          export CLOUDFLARE_ACCOUNT_ID=6838bf50a0d8548d5945008dc7b6797c'));
+      console.log(chalk.gray('          export CLOUDFLARE_API_TOKEN=cfat_...your-full-token'));
+      console.log(chalk.gray('     2. Edit the config file above and ensure it contains:'));
+      console.log(chalk.gray('          "provider": { "cloudflare": { "options": { "accountId": "...", "apiKey": "..." } } }'));
+      console.log(chalk.gray('   Env vars (from .zshrc etc.) always win over the json file.'));
+      console.log();
+    }
+
     console.log(
       chalk.gray(
-        "Real multi-turn coding agent with tools (read/grep/edit + get_symbols for LSP-like intelligence).\n" +
-        "Everything stays in normal scrollback. Use /help."
+        "Everything stays in normal scrollback (finger scroll + copy work great). Use /help."
       )
     );
     console.log();
@@ -79,7 +95,12 @@ export class SimpleREPL {
           });
         }
       } catch (err: any) {
-        console.error(chalk.red("Agent error:"), err.message || err);
+        const msg = (err?.message || String(err)).trim();
+        console.log(chalk.red("Agent error: ") + msg.split('\n')[0]);
+        // If the error already contains the Tip from the LLM layer, don't duplicate.
+        if (!/Tip:/.test(msg)) {
+          console.log(chalk.gray("   Check the config path above, your ~/.zshrc exports, or use /status."));
+        }
       }
     }
   }
@@ -131,7 +152,14 @@ export class SimpleREPL {
     }
 
     if (c === "/status") {
+      const c: any = this.cfg;
+      const hasCf = !!c.cloudflareAccountId;
+      const hasKey = !!(c.apiKey && c.apiKey.length > 4);
       console.log(`model=${this.model}  mode=${this.mode}  yolo=${this.yolo}`);
+      console.log(`config=${c.configPath || '(none)'}  cfCreds=${hasCf ? 'yes' : 'NO'}  apiKey=${hasKey ? 'set' : 'missing'}`);
+      if (!hasCf && (this.model.startsWith('@cf/') || this.model.includes('kimi'))) {
+        console.log(chalk.yellow('  → Cloudflare creds missing. See the warning above or put them in the json / env.'));
+      }
       return true;
     }
 

@@ -8,6 +8,7 @@
  */
 import { loadConfig } from "./config.js";
 import { SimpleREPL } from "./tui/simple.js";
+import chalk from "chalk";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -31,21 +32,41 @@ Usage:
   zencode -p "your task"     # headless (future)
 
 Environment (default route = Cloudflare Workers AI Kimi 2.7):
-  CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN   (required for default Kimi/GLM models)
+  CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN   (highest priority; put in ~/.zshrc and restart shell)
   XAI_API_KEY                                    (optional - use real Grok models instead)
 
   ZENCODE_MODEL   override (e.g. @cf/zhipu-ai/glm-4)
   ZENCODE_YOLO=1  start with auto-approve
 
-Inside the REPL: /help /yolo /plan /model <name> /simple /exit
+Config file (global or per-project):
+  ~/.config/zencode/zencode.json     (or ./zencode.json next to your code)
+  Supports the same shape as opencode.json, including a "provider.cloudflare.options" block
+  with accountId + apiKey. Use this for the mobile Termux-friendly setup.
+
+Inside the REPL: /help /yolo /plan /model <name> /status /exit
 
 Note: Runs with plain Node.js in Termux. No Bun needed at runtime.
+  After editing source: npm run build && npm link   (so your 'zencode' command uses latest)
 `);
     process.exit(0);
   }
 
   const cfg = loadConfig();
   const runningInTermux = isTermux();
+
+  // Early, visible guidance when the common Cloudflare/Kimi default is selected
+  // but the resolved config (global or project zencode.json + env) has no accountId.
+  const c: any = cfg;
+  const usingCf = (cfg.model || '').startsWith('@cf/') || cfg.provider === 'cloudflare' || (cfg.model || '').includes('kimi');
+  if (usingCf && !c.cloudflareAccountId) {
+    console.log(chalk.yellow('⚠  No Cloudflare credentials found for the default Kimi route.'));
+    console.log(chalk.gray('   config: ' + (c.configPath || '(none)')));
+    console.log(chalk.gray('   Either export from your ~/.zshrc (and restart this terminal):'));
+    console.log(chalk.gray('     export CLOUDFLARE_ACCOUNT_ID=6838bf50a0d8548d5945008dc7b6797c'));
+    console.log(chalk.gray('     export CLOUDFLARE_API_TOKEN=cfat_...'));
+    console.log(chalk.gray('   Or add a "provider" block to the config file shown above. Env vars win.'));
+    console.log();
+  }
 
   if (useTui) {
     // Rich Ink TUI (React-based, pure JS — portable alternative to OpenTUI/Zig).
