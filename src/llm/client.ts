@@ -16,6 +16,7 @@ export interface ChatCompletionOptions {
 
 export interface ChatCompletionResult {
   content: string;
+  reasoning_content?: string;
   tool_calls?: any[];
   raw?: any;
 }
@@ -125,6 +126,7 @@ export class LLMClient {
 
     return {
       content: typeof content === "string" ? content : JSON.stringify(content),
+      reasoning_content: data?.result?.choices?.[0]?.message?.reasoning_content || data?.result?.choices?.[0]?.message?.reasoning,
       tool_calls: data?.result?.choices?.[0]?.message?.tool_calls,
       raw: data,
     };
@@ -147,6 +149,7 @@ export class LLMClient {
     const choice = completion.choices[0];
     return {
       content: choice.message.content || "",
+      reasoning_content: (choice.message as any).reasoning_content || (choice.message as any).reasoning,
       tool_calls: choice.message.tool_calls,
       raw: completion,
     };

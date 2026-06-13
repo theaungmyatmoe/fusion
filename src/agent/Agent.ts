@@ -54,6 +54,10 @@ When done, give a clear, concise final summary.`
         temperature: 0.4,
       });
 
+      if (result.reasoning_content) {
+        console.log(chalk.hex("#8b5cf6")("🤔 Thinking: ") + chalk.gray(result.reasoning_content));
+      }
+
       if (result.tool_calls && result.tool_calls.length > 0) {
         this.messages.push({ role: 'assistant', content: result.content || '' } as any);
 
