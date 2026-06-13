@@ -114,6 +114,7 @@ export class LLMClient {
 
     return {
       content: typeof content === "string" ? content : JSON.stringify(content),
+      tool_calls: data?.result?.choices?.[0]?.message?.tool_calls,
       raw: data,
     };
   }
