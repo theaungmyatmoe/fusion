@@ -86,12 +86,8 @@ export function loadConfig(cwd: string = process.cwd()): Config {
   const providers = fileRaw.provider || {};
   if (providers.cloudflare?.options) {
     const opts = providers.cloudflare.options;
-    if (opts.accountId && !cfAccountId) {
-      // will be used below
-    }
-    if (opts.apiKey && !cfToken) {
-      // handled in final
-    }
+    if (opts.accountId && !cfAccountId) cfAccountId = opts.accountId;
+    if (opts.apiKey && !cfToken) cfToken = opts.apiKey;
     if (opts.baseURL && !base) base = opts.baseURL;
   }
   if (providers.xai?.options) {
@@ -100,6 +96,29 @@ export function loadConfig(cwd: string = process.cwd()): Config {
       // will use in generic
     }
     if (opts.baseURL && !base) base = opts.baseURL;
+  }
+
+  // Also harvest common top-level / alternate locations for CF creds (forgiving for global ~/.config/zencode/zencode.json)
+  // Supports:
+  //   { "cloudflareAccountId": "...", "apiKey": "..." }
+  //   { "accountId": "...", "cloudflareApiToken": "..." }
+  //   { "cloudflare": { "accountId": "...", "apiKey": "..." } }
+  //   { "provider": { "cloudflare": { "accountId": "...", "apiKey": "..." } } }  (non-.options)
+  if (!cfAccountId) {
+    cfAccountId =
+      fileRaw.cloudflareAccountId ||
+      fileRaw.accountId ||
+      fileRaw.cloudflare?.accountId ||
+      providers.cloudflare?.accountId ||
+      "";
+  }
+  if (!cfToken) {
+    cfToken =
+      fileRaw.apiKey ||
+      fileRaw.cloudflareApiToken ||
+      fileRaw.cloudflare?.apiKey ||
+      providers.cloudflare?.apiKey ||
+      "";
   }
 
   // Auto-detect sensible default (respect file/env)
@@ -120,9 +139,22 @@ export function loadConfig(cwd: string = process.cwd()): Config {
     model = process.env.ZENCODE_MODEL || fileRaw.model || "@cf/moonshotai/kimi-k2.7-code";
   }
 
-  // Normalize common opencode-style "provider/model" to our internal id
+  // Normalize common opencode-style "provider/model" or "cloudflare/short" to full Workers AI id
+  // Supports "cloudflare/kimi-k2.7-code" (user-friendly shorthand in zencode.json) → "@cf/moonshotai/kimi-k2.7-code"
   if (model.startsWith('cloudflare/')) {
-    model = '@cf/' + model.split('/')[1];
+    let rest = model.slice('cloudflare/'.length);
+    if (!rest.includes('/')) {
+      const shorthand: Record<string, string> = {
+        'kimi-k2.7-code': 'moonshotai/kimi-k2.7-code',
+        'kimi-k2.7': 'moonshotai/kimi-k2.7-code',
+        'kimi': 'moonshotai/kimi-k2.7-code',
+        'glm-4': 'zhipu-ai/glm-4',
+        'glm-4-9b': 'zhipu-ai/glm-4',
+        'qwen2.5-coder': 'qwen/qwen2.5-coder-32b-instruct',
+      };
+      rest = shorthand[rest] || rest;
+    }
+    model = '@cf/' + rest;
   }
 
   if (provider === 'xai' && !base) {

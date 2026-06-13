@@ -24,7 +24,7 @@ export class SimpleREPL {
       chalk.hex("#7c3aed").bold("zencode") +
         chalk.gray(`  mobile-first coding agent for ${platform}`)
     );
-    console.log(`model: ${(this.cfg as any).model || 'default'}   mode: ${this.mode}`);
+    console.log(`model: ${this.model}   mode: ${this.mode}`);
     if ((this.cfg as any).configPath) {
       console.log(chalk.gray(`config: ${(this.cfg as any).configPath}`));
     }
@@ -79,8 +79,7 @@ export class SimpleREPL {
           });
         }
       } catch (err: any) {
-        console.log(chalk.red("Agent error:") + " " + (err?.message || String(err)));
-        console.log(chalk.gray("You can continue typing or use /exit. Check /status and your zencode.json credentials."));
+        console.error(chalk.red("Agent error:"), err.message || err);
       }
     }
   }
