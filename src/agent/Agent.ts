@@ -3,7 +3,7 @@ import type { Config } from '../config.js';
 import { applySearchReplace } from '../util/searchReplace.js';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import chalk from 'chalk';
 
 export interface ToolCall {
@@ -113,6 +113,21 @@ When done, give a clear, concise final summary.`
       {
         type: 'function' as const,
         function: {
+          name: 'write_file',
+          description: 'Create a new file or completely overwrite an existing file with new content.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Path relative to project root' },
+              content: { type: 'string', description: 'Complete content to write to the file' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
           name: 'search_replace',
           description: 'Precise, safe edit. old_string MUST appear EXACTLY ONCE. This is the only way to edit files.',
           parameters: {
@@ -187,6 +202,17 @@ When done, give a clear, concise final summary.`
       const fullPath = resolve(this.cwd, args.path);
       if (!existsSync(fullPath)) return `File not found: ${args.path}`;
       return readFileSync(fullPath, 'utf8');
+    }
+
+    if (name === 'write_file') {
+      const fullPath = resolve(this.cwd, args.path);
+      const dir = dirname(fullPath);
+      const { mkdirSync } = await import('node:fs');
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(fullPath, args.content, 'utf8');
+      return `SUCCESS. Wrote file to ${args.path}.`;
     }
 
     if (name === 'search_replace') {
