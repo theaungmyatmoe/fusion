@@ -37,19 +37,18 @@ type Model struct {
 
 func New(cfg *config.Config) Model {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message...  (Enter=send  Esc=focus scrollback  Ctrl+C=cancel  ? = help)"
+	ta.Placeholder = "Message or /help  (Enter send • /yolo /plan /model • Ctrl+C quit)"
 	ta.Focus()
 	ta.CharLimit = 0
-	ta.SetWidth(80)
-	ta.SetHeight(3)
+	ta.SetWidth(60) // start reasonable for phones
+	ta.SetHeight(2) // compact for mobile
 	ta.ShowLineNumbers = false
 
-	vp := viewport.New(80, 20)
-	vp.SetContent("Welcome to Zencode (early TUI scaffold).\n\n" +
-		"• This is a real bubbletea app.\n" +
-		"• LLM + real tools land in the next passes.\n" +
-		"• Try typing and pressing Enter (it will fake a response + todo).\n\n" +
-		"Keyboard hints: j/k scroll (later), Tab focus, Ctrl+O = yolo toggle, Shift+Tab = plan mode.\n")
+	vp := viewport.New(60, 16)
+	vp.SetContent("Zencode rich TUI (optional --tui mode)\n\n" +
+		"This is the more visual bubbletea experience.\n" +
+		"Default mode is the lighter 'open' terminal REPL — better for phones.\n\n" +
+		"Try: todo, edit, plan, or any message.\nSlash commands work great on soft keyboards.\n")
 
 	m := Model{
 		cfg:      cfg,
@@ -99,7 +98,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "?":
-			m.appendEntry(ui.Dim.Render("Help (stub): Enter sends • Ctrl+O yolo • Shift+Tab mode • Ctrl+C quit"))
+			m.appendEntry(ui.Dim.Render("Rich TUI (use --tui). Default on phones is the simple open REPL (slash commands)."))
 			m.viewport.GotoBottom()
 			return m, nil
 
@@ -187,7 +186,7 @@ func (m Model) simulateAssistant(userMsg string) tea.Cmd {
 				ui.DiffHeader.Render("```diff\n") + ui.DiffAdd.Render("+ added line\n") + ui.DiffDel.Render("- removed line\n") + "```")
 		}
 
-		return assistantChunkMsg(ui.Success.Render("Agent: ") + "Thanks! (This is still a scaffold — real tool-calling loop and Grok/xAI calls are next.)\nTry messages containing 'todo', 'plan', or 'edit' for demo output.")
+		return assistantChunkMsg(ui.Success.Render("Agent: ") + "This is the richer bubbletea TUI (--tui).\nOn phones the default simple open REPL is usually nicer.\nReal LLM + tools coming soon. Try 'todo' or 'edit'.")
 	}
 }
 
@@ -196,22 +195,32 @@ func (m Model) View() string {
 		return "Loading Zencode TUI..."
 	}
 
-	status := ui.StatusBar.Render(fmt.Sprintf(" zencode • mode:%s • %s • (scaffold TUI — real agent soon) ", m.mode, m.cfg.Model))
+	status := ui.StatusBar.Render(fmt.Sprintf(" zc • %s • %s ", m.mode, m.cfg.Model))
 	promptView := m.textarea.View()
 
-	// Simple layout
+	// Compact single-column layout — works on narrow phone screens
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		status,
 		m.viewport.View(),
 		"",
 		promptView,
-		ui.Dim.Render("  Enter send • Esc blur prompt • Ctrl+O yolo • Shift+Tab cycle mode • ? help • Ctrl+C quit"),
+		ui.Dim.Render("  enter=send  /help  ? =keys  ctrl+c=quit"),
 	)
 }
 
-// Run launches the TUI program.
+// Run launches the full bubbletea TUI.
+// Note: we intentionally do NOT use WithAltScreen() by default.
+// This keeps the experience more "open" and native to Termux — your scrollback,
+// finger scrolling, and copy/paste continue to work. Great on phones.
 func Run(cfg *config.Config) error {
+	p := tea.NewProgram(New(cfg)) // no alt screen = more Termux/mobile friendly
+	_, err := p.Run()
+	return err
+}
+
+// RunFull is the previous "take over the screen" variant if someone really wants it.
+func RunFull(cfg *config.Config) error {
 	p := tea.NewProgram(New(cfg), tea.WithAltScreen())
 	_, err := p.Run()
 	return err

@@ -33,6 +33,12 @@ config.toml
 .env*
 secrets/
 
+# zencode config (contains real credentials like Cloudflare tokens)
+# Copy zencode.json.example -> zencode.json and edit
+zencode.json
+zencode.jsonc
+!zencode.json.example
+
 # Build artifacts
 *.log
 /tmp/
@@ -40,3 +46,13 @@ tmp/
 
 # Termux / Android specific noise
 /storage/
+
+# Node / Bun / TS
+node_modules/
+dist/
+*.tsbuildinfo
+bun.lockb
+package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
