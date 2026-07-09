@@ -79,6 +79,7 @@ pub struct App {
     pub is_thinking: bool,
     pub should_quit: bool,
     pub session_id: String,
+    pub theme: String,
 
     // Autocomplete state
     pub autocomplete_visible: bool,
@@ -114,6 +115,15 @@ impl App {
 
         let messages = Vec::new();
 
+        let theme = std::env::var("FUSION_THEME")
+            .or_else(|_| std::env::var("ZENCODE_THEME"))
+            .unwrap_or_else(|_| {
+                config.settings.get("theme")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("dark")
+                    .to_string()
+            });
+
         Self {
             messages,
             input: String::new(),
@@ -123,6 +133,7 @@ impl App {
             is_thinking: false,
             should_quit: false,
             session_id,
+            theme,
             autocomplete_visible: false,
             autocomplete_mode: AutocompleteMode::Commands,
             autocomplete_items: Vec::new(),
@@ -165,6 +176,15 @@ impl App {
             AppMode::Normal
         };
 
+        let theme = std::env::var("FUSION_THEME")
+            .or_else(|_| std::env::var("ZENCODE_THEME"))
+            .unwrap_or_else(|_| {
+                config.settings.get("theme")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("dark")
+                    .to_string()
+            });
+
         Self {
             messages,
             input: String::new(),
@@ -174,6 +194,7 @@ impl App {
             is_thinking: false,
             should_quit: false,
             session_id,
+            theme,
             autocomplete_visible: false,
             autocomplete_mode: AutocompleteMode::Commands,
             autocomplete_items: Vec::new(),

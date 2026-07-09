@@ -8,21 +8,80 @@ use ratatui::{
 
 use crate::app::{App, AppMode, AutocompleteMode};
 
-// ── Clean gray palette (Grok CLI Dark Theme) ───────────────────────────────
+// ── Theme Struct for Light & Dark Modes ─────────────────────────────────────
 
-const LABEL_COLOR: Color = Color::Rgb(224, 224, 224); // #e0e0e0
-const DIM: Color = Color::Rgb(102, 102, 102);         // #666666
-const BORDER: Color = Color::Rgb(51, 51, 51);         // #333333
-const SELECTED_BG: Color = Color::Rgb(42, 42, 42);     // #2a2a2a
-const SELECTED_FG: Color = Color::White;
-const POPUP_BORDER: Color = Color::Rgb(85, 85, 85);    // #555555
-const USER_BG: Color = Color::Rgb(26, 26, 26);         // #1a1a1a (backgroundElement)
-const USER_FG: Color = Color::Rgb(224, 224, 224);     // #e0e0e0
-const AUTOCOMPLETE_BG: Color = Color::Rgb(17, 17, 17); // #111111 (backgroundPanel)
+#[derive(Debug, Clone, Copy)]
+struct Theme {
+    label_color: Color,
+    dim: Color,
+    border: Color,
+    selected_bg: Color,
+    selected_fg: Color,
+    popup_border: Color,
+    user_bg: Color,
+    user_fg: Color,
+    autocomplete_bg: Color,
+    code_fg: Color,
+    code_bg: Color,
+    code_block_fg: Color,
+    header_color: Color,
+    bold_color: Color,
+    italic_color: Color,
+    bullet_color: Color,
+}
+
+impl Theme {
+    fn load(app_theme: &str) -> Self {
+        if app_theme.eq_ignore_ascii_case("light") {
+            // Grok CLI Light Theme values
+            Self {
+                label_color: Color::Rgb(30, 30, 30),       // #1e1e1e (dark gray text)
+                dim: Color::Rgb(120, 120, 120),            // #787878 (muted gray)
+                border: Color::Rgb(215, 215, 215),         // #d7d7d7 (light borders)
+                selected_bg: Color::Rgb(230, 230, 230),     // #e6e6e6 (light selected row)
+                selected_fg: Color::Black,
+                popup_border: Color::Rgb(180, 180, 180),    // #b4b4b4
+                user_bg: Color::Rgb(240, 240, 240),         // #f0f0f0 (subtle light background for user box)
+                user_fg: Color::Rgb(30, 30, 30),
+                autocomplete_bg: Color::Rgb(248, 248, 248), // #f8f8f8
+                code_fg: Color::Rgb(40, 120, 40),          // #287828 (darker green for light theme code)
+                code_bg: Color::Rgb(240, 240, 240),
+                code_block_fg: Color::Rgb(60, 60, 60),
+                header_color: Color::Rgb(26, 115, 232),     // #1a73e8 (standard light link blue)
+                bold_color: Color::Rgb(190, 90, 10),        // #be5a0a (warm brown-orange)
+                italic_color: Color::Rgb(150, 110, 10),     // #966e0a (olive)
+                bullet_color: Color::Rgb(120, 120, 120),
+            }
+        } else {
+            // Grok CLI Dark Theme values
+            Self {
+                label_color: Color::Rgb(224, 224, 224),     // #e0e0e0
+                dim: Color::Rgb(102, 102, 102),             // #666666
+                border: Color::Rgb(51, 51, 51),             // #333333
+                selected_bg: Color::Rgb(42, 42, 42),         // #2a2a2a
+                selected_fg: Color::White,
+                popup_border: Color::Rgb(85, 85, 85),       // #555555
+                user_bg: Color::Rgb(26, 26, 26),            // #1a1a1a (backgroundElement)
+                user_fg: Color::Rgb(224, 224, 224),         // #e0e0e0
+                autocomplete_bg: Color::Rgb(17, 17, 17),     // #111111 (backgroundPanel)
+                code_fg: Color::Rgb(106, 191, 106),         // #6abf6a (grok green)
+                code_bg: Color::Rgb(20, 20, 20),           // #141414
+                code_block_fg: Color::Rgb(192, 192, 192),
+                header_color: Color::Rgb(92, 156, 245),     // #5c9cf5 (grok blue)
+                bold_color: Color::Rgb(232, 164, 101),       // #e8a465 (grok orange/brown)
+                italic_color: Color::Rgb(229, 192, 123),     // #e5c07b (grok yellow)
+                bullet_color: Color::DarkGray,
+            }
+        }
+    }
+}
+
+const INDENT: &str = "  ";
 
 /// Render the full TUI frame.
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
+    let theme = Theme::load(&app.theme);
 
     // Outer margin: 1 cell on left/right for breathing room
     let inner = area.inner(Margin {
@@ -39,18 +98,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .split(inner);
 
-    draw_status_bar(frame, app, chunks[0]);
-    draw_messages(frame, app, chunks[1], area.width);
+    draw_status_bar(frame, app, chunks[0], theme);
+    draw_messages(frame, app, chunks[1], area.width, theme);
     // chunks[2] is just a spacer
-    draw_input(frame, app, chunks[3]);
-    draw_hint(frame, app, chunks[4]);
+    draw_input(frame, app, chunks[3], theme);
+    draw_hint(frame, app, chunks[4], theme);
 
     if app.autocomplete_visible && !app.autocomplete_items.is_empty() {
-        draw_autocomplete(frame, app, chunks[3]);
+        draw_autocomplete(frame, app, chunks[3], theme);
     }
 }
 
-fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let thinking = if app.is_thinking { " thinking..." } else { "" };
 
     let model_display = fusion_core::models::lookup_model(&app.model)
@@ -79,16 +138,16 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             left,
             Style::default()
-                .fg(LABEL_COLOR)
+                .fg(theme.label_color)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" ".repeat(padding)),
-        Span::styled(right, Style::default().fg(DIM)),
+        Span::styled(right, Style::default().fg(theme.dim)),
     ]));
     frame.render_widget(bar, area);
 }
 
-fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16) {
+fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, theme: Theme) {
     let mut lines: Vec<Line> = Vec::new();
     let width = full_width as usize;
 
@@ -96,70 +155,82 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16) {
         match msg.role.as_str() {
             "user" => {
                 lines.push(Line::from(""));
-                // Full-width highlighted row
-                let prefix = format!(" \u{276f} ");
+                // Grok-style box: colored left vertical line indicator + background highlight
+                let border_prefix = " \u{2503} "; // " ┃ " (vertical line)
+                let prefix = " \u{276f} ";        // " ❯ " (chevron)
                 let content = &msg.content;
-                let text_len = prefix.len() + content.len();
+                let text_len = border_prefix.len() + prefix.len() + content.len();
                 let trail = if width > text_len {
                     " ".repeat(width - text_len)
                 } else {
                     String::new()
                 };
                 lines.push(Line::from(vec![
+                    // Left vertical border (blue/accent color)
+                    Span::styled(
+                        border_prefix,
+                        Style::default()
+                            .fg(theme.header_color)
+                            .bg(theme.user_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    // Inner chevron
                     Span::styled(
                         prefix,
                         Style::default()
-                            .fg(DIM)
-                            .bg(USER_BG)
+                            .fg(theme.dim)
+                            .bg(theme.user_bg)
                             .add_modifier(Modifier::BOLD),
                     ),
+                    // Content text
                     Span::styled(
                         content.to_string(),
-                        Style::default().fg(USER_FG).bg(USER_BG),
+                        Style::default().fg(theme.user_fg).bg(theme.user_bg),
                     ),
-                    Span::styled(trail, Style::default().bg(USER_BG)),
+                    // Trail space to fill the line background
+                    Span::styled(trail, Style::default().bg(theme.user_bg)),
                 ]));
             }
             "thought_time" => {
-                // "Thought for Xs" like Grok
+                // "◆ Thought for Xs" like Grok CLI
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  Thought for {}", msg.content),
+                    format!("  \u{25c6} Thought for {}", msg.content),
                     Style::default()
-                        .fg(DIM)
+                        .fg(theme.dim)
                         .add_modifier(Modifier::ITALIC),
                 )));
                 lines.push(Line::from(""));
             }
             "assistant" => {
-                let md_lines = render_markdown(&msg.content);
+                let md_lines = render_markdown(&msg.content, theme);
                 lines.extend(md_lines);
             }
             "turn_time" => {
-                // "Turn completed in Xs" like Grok
+                // "Turn completed in Xs." (with trailing period)
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  Turn completed in {}", msg.content),
-                    Style::default().fg(DIM),
+                    format!("  Turn completed in {}.", msg.content),
+                    Style::default().fg(theme.dim),
                 )));
             }
             "tool" => {
                 lines.push(Line::from(Span::styled(
                     format!("    {}", msg.content),
-                    Style::default().fg(DIM),
+                    Style::default().fg(theme.dim),
                 )));
             }
             "tool_result" => {
                 lines.push(Line::from(Span::styled(
                     format!("    {}", msg.content),
-                    Style::default().fg(DIM),
+                    Style::default().fg(theme.dim),
                 )));
             }
             "thinking" => {
                 lines.push(Line::from(Span::styled(
                     format!("    thinking: {}", msg.content),
                     Style::default()
-                        .fg(DIM)
+                        .fg(theme.dim)
                         .add_modifier(Modifier::ITALIC),
                 )));
             }
@@ -170,17 +241,46 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16) {
                 )));
             }
             "system" => {
-                for line in msg.content.lines() {
+                if msg.content.starts_with("Todos:") {
+                    lines.push(Line::from(""));
+                    // "◆ Implementation Plan" header in yellow (bold_color)
                     lines.push(Line::from(Span::styled(
-                        format!("  {}", line),
-                        Style::default().fg(DIM),
+                        "  \u{25c6} Implementation Plan",
+                        Style::default()
+                            .fg(theme.bold_color)
+                            .add_modifier(Modifier::BOLD),
                     )));
+                    lines.push(Line::from(""));
+                    for line in msg.content.lines().skip(1) {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() { continue; }
+
+                        let (icon, text) = if trimmed.starts_with("✓") {
+                            ("  \u{2713} ", &trimmed[2..]) // checkmark
+                        } else if trimmed.starts_with("→") {
+                            ("  \u{2192} ", &trimmed[2..]) // arrow
+                        } else {
+                            ("  \u{25cb} ", &trimmed[2..]) // circle
+                        };
+
+                        lines.push(Line::from(vec![
+                            Span::styled(icon, Style::default().fg(theme.bold_color)),
+                            Span::styled(text.to_string(), Style::default().fg(theme.label_color)),
+                        ]));
+                    }
+                } else {
+                    for line in msg.content.lines() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", line),
+                            Style::default().fg(theme.dim),
+                        )));
+                    }
                 }
             }
             _ => {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", msg.content),
-                    Style::default().fg(DIM),
+                    Style::default().fg(theme.dim),
                 )));
             }
         }
@@ -203,22 +303,22 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16) {
     frame.render_widget(messages_widget, area);
 }
 
-fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let input_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER));
+        .border_style(Style::default().fg(theme.border));
 
     let input_line = Line::from(vec![
         Span::styled(
             "\u{276f} ",
             Style::default()
-                .fg(DIM)
+                .fg(theme.dim)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             app.input.clone(),
             Style::default()
-                .fg(LABEL_COLOR)
+                .fg(theme.label_color)
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
@@ -235,7 +335,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
+fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Theme) {
     let item_count = app.autocomplete_items.len().min(10);
     let popup_height = item_count as u16 + 2;
 
@@ -262,9 +362,9 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
         let prefix = if is_selected { "\u{276f} " } else { "  " };
 
         let (fg, bg) = if is_selected {
-            (SELECTED_FG, SELECTED_BG)
+            (theme.selected_fg, theme.selected_bg)
         } else {
-            (LABEL_COLOR, AUTOCOMPLETE_BG)
+            (theme.label_color, theme.autocomplete_bg)
         };
 
         let current_tag = if item.is_current { " (current)" } else { "" };
@@ -278,7 +378,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
             Span::styled(
                 format!("  {}", item.description),
                 Style::default()
-                    .fg(if is_selected { Color::LightCyan } else { DIM })
+                    .fg(if is_selected { Color::LightCyan } else { theme.dim })
                     .bg(bg),
             ),
         ]));
@@ -289,15 +389,15 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
     let popup = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(POPUP_BORDER))
-            .style(Style::default().bg(AUTOCOMPLETE_BG))
-            .title_bottom(Span::styled(count_str, Style::default().fg(DIM))),
+            .border_style(Style::default().fg(theme.popup_border))
+            .style(Style::default().bg(theme.autocomplete_bg))
+            .title_bottom(Span::styled(count_str, Style::default().fg(theme.dim))),
     );
 
     frame.render_widget(popup, popup_area);
 }
 
-fn draw_hint(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let model_display = fusion_core::models::lookup_model(&app.model)
         .map(|m| m.display_name.to_string())
         .unwrap_or_else(|| {
@@ -332,11 +432,11 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect) {
     let padding = total_width.saturating_sub(left_text.len() + right_text.len() + 2);
 
     let hint = Paragraph::new(Line::from(vec![
-        Span::styled(&left_text, Style::default().fg(DIM)),
+        Span::styled(&left_text, Style::default().fg(theme.dim)),
         Span::raw(" ".repeat(padding)),
         Span::styled(
             right_text,
-            Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
+            Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
         ),
     ]));
     frame.render_widget(hint, area);
@@ -363,33 +463,21 @@ fn short_cwd() -> String {
 
 // ── Markdown Renderer ────────────────────────────────────────────────────────
 
-const CODE_FG: Color = Color::Rgb(106, 191, 106);   // #6abf6a (grok green)
-const CODE_BG: Color = Color::Rgb(20, 20, 20);     // #141414 (grok dark bg)
-const CODE_BLOCK_FG: Color = Color::Rgb(192, 192, 192); // #c0c0c0
-const HEADER_COLOR: Color = Color::Rgb(92, 156, 245); // #5c9cf5 (grok blue)
-const BOLD_COLOR: Color = Color::Rgb(232, 164, 101);   // #e8a465 (grok orange/brown)
-const ITALIC_COLOR: Color = Color::Rgb(229, 192, 123); // #e5c07b (grok yellow)
-const BULLET_COLOR: Color = Color::DarkGray;
-const INDENT: &str = "  ";
-
 /// Render a markdown string into styled Ratatui lines.
-fn render_markdown(text: &str) -> Vec<Line<'static>> {
+fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
     let mut code_lines: Vec<String> = Vec::new();
 
     for raw_line in text.lines() {
-        // Code block toggle
         if raw_line.trim_start().starts_with("```") {
             if in_code_block {
-                // End code block — flush accumulated code
-                flush_code_block(&mut lines, &code_lang, &code_lines);
+                flush_code_block(&mut lines, &code_lang, &code_lines, theme);
                 code_lines.clear();
                 code_lang.clear();
                 in_code_block = false;
             } else {
-                // Start code block
                 in_code_block = true;
                 code_lang = raw_line.trim_start().trim_start_matches('`').to_string();
             }
@@ -401,7 +489,6 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             continue;
         }
 
-        // Empty line
         if raw_line.trim().is_empty() {
             lines.push(Line::from(""));
             continue;
@@ -409,21 +496,19 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
 
         let trimmed = raw_line.trim_start();
 
-        // Horizontal rule
         if trimmed.len() >= 3 && trimmed.chars().all(|c| c == '-' || c == '*' || c == '_') {
             lines.push(Line::from(Span::styled(
                 format!("{}───────────────────────────", INDENT),
-                Style::default().fg(DIM),
+                Style::default().fg(theme.dim),
             )));
             continue;
         }
 
-        // Headers
         if let Some(rest) = trimmed.strip_prefix("### ") {
             lines.push(Line::from(Span::styled(
                 format!("{}   {}", INDENT, rest),
                 Style::default()
-                    .fg(HEADER_COLOR)
+                    .fg(theme.header_color)
                     .add_modifier(Modifier::BOLD),
             )));
             continue;
@@ -432,7 +517,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             lines.push(Line::from(Span::styled(
                 format!("{}  {}", INDENT, rest),
                 Style::default()
-                    .fg(HEADER_COLOR)
+                    .fg(theme.header_color)
                     .add_modifier(Modifier::BOLD),
             )));
             continue;
@@ -441,13 +526,12 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             lines.push(Line::from(Span::styled(
                 format!("{}{}", INDENT, rest),
                 Style::default()
-                    .fg(HEADER_COLOR)
+                    .fg(theme.header_color)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
             continue;
         }
 
-        // List items (- or * or numbered)
         let (bullet_prefix, content) = if let Some(rest) = trimmed.strip_prefix("- ") {
             ("  - ", rest)
         } else if let Some(rest) = trimmed.strip_prefix("* ") {
@@ -464,29 +548,26 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             let mut spans = vec![
                 Span::styled(
                     format!("{}{}", INDENT, bullet_prefix),
-                    Style::default().fg(BULLET_COLOR),
+                    Style::default().fg(theme.bullet_color),
                 ),
             ];
-            spans.extend(parse_inline_markdown(content));
+            spans.extend(parse_inline_markdown(content, theme));
             lines.push(Line::from(spans));
         } else {
-            // Normal paragraph line
             let mut spans = vec![Span::raw(INDENT.to_string())];
-            spans.extend(parse_inline_markdown(content));
+            spans.extend(parse_inline_markdown(content, theme));
             lines.push(Line::from(spans));
         }
     }
 
-    // Handle unclosed code block
     if in_code_block && !code_lines.is_empty() {
-        flush_code_block(&mut lines, &code_lang, &code_lines);
+        flush_code_block(&mut lines, &code_lang, &code_lines, theme);
     }
 
     lines
 }
 
-/// Flush accumulated code block lines into styled output.
-fn flush_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[String]) {
+fn flush_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[String], theme: Theme) {
     let lang_label = if lang.is_empty() {
         String::new()
     } else {
@@ -494,33 +575,30 @@ fn flush_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[St
     };
     lines.push(Line::from(Span::styled(
         format!("  ┌──{}", lang_label),
-        Style::default().fg(DIM),
+        Style::default().fg(theme.dim),
     )));
     for cl in code_lines {
         lines.push(Line::from(Span::styled(
             format!("  │ {}", cl),
-            Style::default().fg(CODE_BLOCK_FG).bg(CODE_BG),
+            Style::default().fg(theme.code_block_fg).bg(theme.code_bg),
         )));
     }
     lines.push(Line::from(Span::styled(
         "  └──",
-        Style::default().fg(DIM),
+        Style::default().fg(theme.dim),
     )));
 }
 
-/// Parse inline markdown (bold, italic, inline code) into styled Spans.
-fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
+fn parse_inline_markdown(text: &str, theme: Theme) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let chars: Vec<char> = text.chars().collect();
     let mut pos = 0;
     let mut buf = String::new();
 
     while pos < chars.len() {
-        // Inline code: `text`
         if chars[pos] == '`' {
-            // Flush buffer
             if !buf.is_empty() {
-                spans.push(Span::styled(buf.clone(), Style::default().fg(LABEL_COLOR)));
+                spans.push(Span::styled(buf.clone(), Style::default().fg(theme.label_color)));
                 buf.clear();
             }
             pos += 1;
@@ -530,19 +608,18 @@ fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
                 pos += 1;
             }
             if pos < chars.len() {
-                pos += 1; // skip closing `
+                pos += 1;
             }
             spans.push(Span::styled(
                 format!(" {} ", code),
-                Style::default().fg(CODE_FG).bg(CODE_BG),
+                Style::default().fg(theme.code_fg).bg(theme.code_bg),
             ));
             continue;
         }
 
-        // Bold: **text**
         if pos + 1 < chars.len() && chars[pos] == '*' && chars[pos + 1] == '*' {
             if !buf.is_empty() {
-                spans.push(Span::styled(buf.clone(), Style::default().fg(LABEL_COLOR)));
+                spans.push(Span::styled(buf.clone(), Style::default().fg(theme.label_color)));
                 buf.clear();
             }
             pos += 2;
@@ -552,21 +629,20 @@ fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
                 pos += 1;
             }
             if pos + 1 < chars.len() {
-                pos += 2; // skip closing **
+                pos += 2;
             }
             spans.push(Span::styled(
                 bold_text,
                 Style::default()
-                    .fg(BOLD_COLOR)
+                    .fg(theme.bold_color)
                     .add_modifier(Modifier::BOLD),
             ));
             continue;
         }
 
-        // Italic: *text* (single star, not followed by another star)
         if chars[pos] == '*' && (pos + 1 >= chars.len() || chars[pos + 1] != '*') {
             if !buf.is_empty() {
-                spans.push(Span::styled(buf.clone(), Style::default().fg(LABEL_COLOR)));
+                spans.push(Span::styled(buf.clone(), Style::default().fg(theme.label_color)));
                 buf.clear();
             }
             pos += 1;
@@ -576,12 +652,12 @@ fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
                 pos += 1;
             }
             if pos < chars.len() {
-                pos += 1; // skip closing *
+                pos += 1;
             }
             spans.push(Span::styled(
                 italic_text,
                 Style::default()
-                    .fg(ITALIC_COLOR)
+                    .fg(theme.italic_color)
                     .add_modifier(Modifier::ITALIC),
             ));
             continue;
@@ -592,7 +668,7 @@ fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
     }
 
     if !buf.is_empty() {
-        spans.push(Span::styled(buf, Style::default().fg(LABEL_COLOR)));
+        spans.push(Span::styled(buf, Style::default().fg(theme.label_color)));
     }
 
     spans
