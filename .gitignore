@@ -23,3 +23,6 @@ Thumbs.db
 # Local Reference Clones
 /reference/
 
+# TUI Local Pastes and Tool States
+image_*.png
+.antigravitycli/

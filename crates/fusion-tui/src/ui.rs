@@ -33,27 +33,7 @@ struct Theme {
 
 impl Theme {
     fn load(app_theme: &str) -> Self {
-        if app_theme.eq_ignore_ascii_case("light") {
-            // Grok CLI Light Theme values
-            Self {
-                label_color: Color::Rgb(30, 30, 30),       // #1e1e1e (dark gray text)
-                dim: Color::Rgb(120, 120, 120),            // #787878 (muted gray)
-                border: Color::Rgb(215, 215, 215),         // #d7d7d7 (light borders)
-                selected_bg: Color::Rgb(230, 230, 230),     // #e6e6e6 (light selected row)
-                selected_fg: Color::Black,
-                popup_border: Color::Rgb(180, 180, 180),    // #b4b4b4
-                user_bg: Color::Rgb(240, 240, 240),         // #f0f0f0 (subtle light background for user box)
-                user_fg: Color::Rgb(30, 30, 30),
-                autocomplete_bg: Color::Rgb(248, 248, 248), // #f8f8f8
-                code_fg: Color::Rgb(40, 120, 40),          // #287828 (darker green for light theme code)
-                code_bg: Color::Rgb(240, 240, 240),
-                code_block_fg: Color::Rgb(60, 60, 60),
-                header_color: Color::Rgb(26, 115, 232),     // #1a73e8 (standard light link blue)
-                bold_color: Color::Rgb(190, 90, 10),        // #be5a0a (warm brown-orange)
-                italic_color: Color::Rgb(150, 110, 10),     // #966e0a (olive)
-                bullet_color: Color::Rgb(120, 120, 120),
-            }
-        } else {
+        if app_theme.eq_ignore_ascii_case("dark") {
             // Grok CLI Dark Theme values
             Self {
                 label_color: Color::Rgb(224, 224, 224),     // #e0e0e0
@@ -72,6 +52,26 @@ impl Theme {
                 bold_color: Color::Rgb(232, 164, 101),       // #e8a465 (grok orange/brown)
                 italic_color: Color::Rgb(229, 192, 123),     // #e5c07b (grok yellow)
                 bullet_color: Color::DarkGray,
+            }
+        } else {
+            // Grok CLI Light Theme values (default fallback)
+            Self {
+                label_color: Color::Rgb(30, 30, 30),       // #1e1e1e (dark gray text)
+                dim: Color::Rgb(120, 120, 120),            // #787878 (muted gray)
+                border: Color::Rgb(215, 215, 215),         // #d7d7d7 (light borders)
+                selected_bg: Color::Rgb(230, 230, 230),     // #e6e6e6 (light selected row)
+                selected_fg: Color::Black,
+                popup_border: Color::Rgb(180, 180, 180),    // #b4b4b4
+                user_bg: Color::Rgb(240, 240, 240),         // #f0f0f0 (subtle light background for user box)
+                user_fg: Color::Rgb(30, 30, 30),
+                autocomplete_bg: Color::Rgb(248, 248, 248), // #f8f8f8
+                code_fg: Color::Rgb(40, 120, 40),          // #287828 (darker green for light theme code)
+                code_bg: Color::Rgb(240, 240, 240),
+                code_block_fg: Color::Rgb(60, 60, 60),
+                header_color: Color::Rgb(26, 115, 232),     // #1a73e8 (standard light link blue)
+                bold_color: Color::Rgb(190, 90, 10),        // #be5a0a (warm brown-orange)
+                italic_color: Color::Rgb(150, 110, 10),     // #966e0a (olive)
+                bullet_color: Color::Rgb(120, 120, 120),
             }
         }
     }
@@ -264,15 +264,21 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                 lines.push(Line::from(""));
             }
             "thinking" => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  ┌── Thought Process",
+                    Style::default().fg(theme.dim),
+                )));
                 for line in msg.content.lines() {
                     lines.push(Line::from(vec![
-                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
-                        Span::styled(
-                            format!("thinking: {}", line),
-                            Style::default().fg(theme.dim),
-                        ),
+                        Span::styled("  │ ", Style::default().fg(theme.dim)),
+                        Span::styled(line.to_string(), Style::default().fg(theme.dim)),
                     ]));
                 }
+                lines.push(Line::from(Span::styled(
+                    "  └──",
+                    Style::default().fg(theme.dim),
+                )));
             }
             "error" => {
                 lines.push(Line::from(Span::styled(
@@ -298,12 +304,14 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                         let trimmed = line.trim();
                         if trimmed.is_empty() { continue; }
 
-                        let (icon, text) = if trimmed.starts_with("✓") {
-                            (" \u{2713} ", &trimmed[2..]) // checkmark
-                        } else if trimmed.starts_with("→") {
-                            (" \u{2192} ", &trimmed[2..]) // arrow
+                        let (icon, text) = if let Some(stripped) = trimmed.strip_prefix("✓") {
+                            (" \u{2713} ", stripped.trim_start())
+                        } else if let Some(stripped) = trimmed.strip_prefix("→") {
+                            (" \u{2192} ", stripped.trim_start())
+                        } else if let Some(stripped) = trimmed.strip_prefix("○") {
+                            (" \u{25cb} ", stripped.trim_start())
                         } else {
-                            (" \u{25cb} ", &trimmed[2..]) // circle
+                            (" \u{25cb} ", trimmed)
                         };
 
                         lines.push(Line::from(vec![
@@ -562,7 +570,7 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         Span::raw(" ".repeat(padding)),
         Span::styled(
             right_text,
-            Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+            Style::default().fg(theme.dim),
         ),
     ]));
     frame.render_widget(hint, area);

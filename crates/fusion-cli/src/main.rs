@@ -1,6 +1,7 @@
 use clap::Parser;
 use fusion_core::config::{is_termux, load_config};
 use fusion_core::session::Session;
+use std::io::Write;
 use std::path::PathBuf;
 
 /// Fusion — mobile-first AI coding agent for Termux (and terminals).
@@ -51,6 +52,61 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // In case the terminal was left in raw mode from a previous crashed run:
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+
+    // Set a panic hook to clean up the terminal raw mode before exiting
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // Restore terminal raw mode and leave alternate screen
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste,
+            crossterm::cursor::Show
+        );
+
+        // Format panic message
+        let payload = panic_info.payload();
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "Box<dyn Any>"
+        };
+
+        let location = panic_info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+
+        let backtrace = std::backtrace::Backtrace::capture();
+
+        // Write to fusion.log
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("fusion.log")
+        {
+            let _ = writeln!(file, "=== PANIC ===");
+            if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                let _ = writeln!(file, "Timestamp: {}", now.as_secs());
+            }
+            let _ = writeln!(file, "Location: {}", location);
+            let _ = writeln!(file, "Message: {}", msg);
+            let _ = writeln!(file, "Backtrace:\n{}", backtrace);
+            let _ = writeln!(file, "=============\n");
+        }
+
+        // Print nice error message
+        eprintln!("\n\x1b[31;1mFusion panicked:\x1b[0m {}", msg);
+        eprintln!("Location: {}", location);
+        eprintln!("Backtrace and details written to \x1b[33mfusion.log\x1b[0m\n");
+    }));
+
     let cli = Cli::parse();
 
     // Change working directory if specified

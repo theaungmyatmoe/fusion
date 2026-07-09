@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use fusion_agent::agent::{Agent, AgentEvent};
 use fusion_core::config::Config;
 
@@ -47,6 +45,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
     let mut rl = rustyline::DefaultEditor::new()?;
     let mut yolo = config.yolo;
     let mut current_mode = mode.to_string();
+    let mut pending_image: Option<String> = None;
 
     loop {
         let readline = rl.readline("\x1b[38;2;124;58;237;1mz>\x1b[0m ");
@@ -87,6 +86,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                     println!("  /plan            enter plan mode");
                     println!("  /model <name>    switch model");
                     println!("  /status          current settings");
+                    println!("  /image           insert clipboard image (macOS)");
                     println!("  /exit, /quit     leave");
                     println!();
                     println!("\x1b[90mJust type to chat with the agent.\x1b[0m");
@@ -107,6 +107,24 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                 "/status" => {
                     println!("model={}  mode={}", config.model, current_mode);
                 }
+                "/image" => {
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    match crate::clipboard::save_clipboard_image(&cwd) {
+                        Ok(path) => {
+                            let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                            println!("\x1b[32mSaved clipboard image to ./{}\x1b[0m", filename);
+                            println!("\x1b[90mWill be automatically attached to your next prompt.\x1b[0m");
+                            let link = format!(" [image](file://{})", path.to_string_lossy());
+                            pending_image = Some(link);
+                        }
+                        Err(e) => {
+                            println!("\x1b[31mError saving image:\x1b[0m {}", e);
+                        }
+                    }
+                }
                 _ if lower.starts_with("/model ") => {
                     let new_model = trimmed[7..].trim();
                     println!("Model → {}", new_model);
@@ -119,7 +137,15 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
         }
 
         // User message
-        println!("\x1b[38;2;59;130;246;1mYou:\x1b[0m {}", trimmed);
+        let prompt_text = if let Some(ref link) = pending_image {
+            let full = format!("{} {}", trimmed, link);
+            println!("\x1b[38;2;59;130;246;1mYou:\x1b[0m {} \x1b[90m(attached clipboard image)\x1b[0m", trimmed);
+            pending_image = None;
+            full
+        } else {
+            println!("\x1b[38;2;59;130;246;1mYou:\x1b[0m {}", trimmed);
+            trimmed.to_string()
+        };
 
         let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
         let printer = tokio::spawn(async move {
@@ -159,12 +185,16 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                         println!("\x1b[36m[tool] {}\x1b[0m {}", name, &args_preview[..args_preview.len().min(200)]);
                     }
                     AgentEvent::ToolResult { name: _, output } => {
-                        let truncated = if output.len() > 500 {
-                            format!("{}...", &output[..500])
+                        let cleaned = output.replace("\r\n", "\n");
+                        let truncated = if cleaned.len() > 1000 {
+                            let truncated_str: String = cleaned.chars().take(1000).collect();
+                            format!("{}...\n[output truncated]", truncated_str)
                         } else {
-                            output
+                            cleaned
                         };
-                        println!("\x1b[90m  → {}\x1b[0m", truncated);
+                        for line in truncated.lines() {
+                            println!("\x1b[90m  → {}\x1b[0m", line);
+                        }
                     }
                     AgentEvent::FinalResponse(text) => {
                         if !is_first_thinking {
@@ -191,7 +221,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
             }
         });
 
-        if let Err(e) = agent.process(trimmed, agent_tx).await {
+        if let Err(e) = agent.process(&prompt_text, agent_tx).await {
             let msg = format!("{}", e);
             println!("\n\x1b[31mAgent error:\x1b[0m {}", msg.lines().next().unwrap_or(&msg));
         }

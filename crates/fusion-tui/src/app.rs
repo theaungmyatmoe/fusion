@@ -48,6 +48,8 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/session", description: "Show current session ID", has_submenu: false },
     SlashCommand { name: "/sessions", description: "List saved sessions", has_submenu: false },
     SlashCommand { name: "/clear", description: "Clear message history", has_submenu: false },
+    SlashCommand { name: "/image", description: "Insert clipboard image (macOS)", has_submenu: false },
+    SlashCommand { name: "/edit", description: "Compose/edit input in external editor", has_submenu: false },
     SlashCommand { name: "/quit", description: "Quit (session auto-saved)", has_submenu: false },
 ];
 
@@ -99,9 +101,15 @@ pub struct App {
     pub scroll_offset: Cell<usize>,
     pub auto_scroll: Cell<bool>,
 
+    pub last_key_time: Option<Instant>,
+    pub in_paste_burst: bool,
+    pub submitted_text: Option<String>,
+    pub editor_requested: Option<String>,
+
     agent: Arc<Mutex<Agent>>,
     session: Session,
     event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub agent_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl App {
@@ -151,9 +159,14 @@ impl App {
             tick_count: 0,
             scroll_offset: Cell::new(0),
             auto_scroll: Cell::new(true),
+            last_key_time: None,
+            in_paste_burst: false,
+            submitted_text: None,
+            editor_requested: None,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
+            agent_handle: None,
         }
     }
 
@@ -217,14 +230,93 @@ impl App {
             tick_count: 0,
             scroll_offset: Cell::new(0),
             auto_scroll: Cell::new(true),
+            last_key_time: None,
+            in_paste_burst: false,
+            submitted_text: None,
+            editor_requested: None,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
+            agent_handle: None,
+        }
+    }
+
+    pub fn handle_paste(&mut self, text: String) {
+        if let Some(path) = try_parse_image_path(&text) {
+            let filename = path.file_name().unwrap_or_default().to_string_lossy();
+            self.messages.push(Message {
+                role: "system".to_string(),
+                content: format!("Detected image path: ./{} (attached).", filename),
+            });
+            let link = format!(" [image](file://{})", path.to_string_lossy());
+            self.input.push_str(&link);
+            self.update_autocomplete();
+            return;
+        }
+
+        let cleaned = text.replace('\r', "").replace('\n', " ");
+        let truncated: String = cleaned.chars().take(2000).collect();
+        self.input.push_str(&truncated);
+        self.update_autocomplete();
+    }
+
+    /// Handle a mouse event.
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        match mouse.kind {
+            crossterm::event::MouseEventKind::ScrollUp => {
+                self.auto_scroll.set(false);
+                self.scroll_offset.set(self.scroll_offset.get().saturating_sub(3));
+            }
+            crossterm::event::MouseEventKind::ScrollDown => {
+                self.auto_scroll.set(false);
+                self.scroll_offset.set(self.scroll_offset.get().saturating_add(3));
+            }
+            _ => {}
         }
     }
 
     /// Handle a key event.
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        let now = Instant::now();
+        let is_paste_like = if let Some(last_time) = self.last_key_time {
+            now.duration_since(last_time) < std::time::Duration::from_millis(15)
+        } else {
+            false
+        };
+        self.last_key_time = Some(now);
+
+        if is_paste_like {
+            self.in_paste_burst = true;
+        } else {
+            if let Some(last_time) = self.last_key_time {
+                if now.duration_since(last_time) > std::time::Duration::from_millis(100) {
+                    self.in_paste_burst = false;
+                }
+            }
+        }
+
+        if self.is_thinking {
+            if key.code == KeyCode::Esc {
+                if let Some(handle) = self.agent_handle.take() {
+                    handle.abort();
+                }
+                self.is_thinking = false;
+                self.remove_thinking();
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: "Execution interrupted by user.".to_string(),
+                });
+                if let Some(text) = self.submitted_text.take() {
+                    self.input = text;
+                }
+                self.save_session();
+            } else if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+                self.save_session();
+                self.should_quit = true;
+            }
+            return;
+        }
+
         if self.autocomplete_visible {
             match (key.modifiers, key.code) {
                 (_, KeyCode::Up) => {
@@ -257,6 +349,28 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 self.save_session();
                 self.should_quit = true;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('v')) => {
+                let cwd = self.session.cwd.clone();
+                match crate::clipboard::save_clipboard_image(&cwd) {
+                    Ok(path) => {
+                        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: format!("Saved clipboard image to ./{} and appended link.", filename),
+                        });
+                        let link = format!(" [image](file://{})", path.to_string_lossy());
+                        self.input.push_str(&link);
+                    }
+                    Err(_) => {
+                        if let Ok(text) = crate::clipboard::get_clipboard_text() {
+                            self.handle_paste(text);
+                        }
+                    }
+                }
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+                self.editor_requested = Some(self.input.clone());
             }
             (_, KeyCode::Up) => {
                 self.auto_scroll.set(false);
@@ -292,12 +406,39 @@ impl App {
                 });
             }
             (_, KeyCode::Enter) => {
+                if self.in_paste_burst || is_paste_like {
+                    // Suppress submission during paste bursts. Replace with a space.
+                    self.input.push(' ');
+                    self.update_autocomplete();
+                    return;
+                }
                 self.close_autocomplete();
                 let text = self.input.trim().to_string();
                 if !text.is_empty() {
-                    self.input.clear();
-                    self.auto_scroll.set(true);
-                    self.handle_submit(text);
+                    if text == "/image" || text.starts_with("/image ") {
+                        let cwd = self.session.cwd.clone();
+                        match crate::clipboard::save_clipboard_image(&cwd) {
+                            Ok(path) => {
+                                let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                                self.messages.push(Message {
+                                    role: "system".to_string(),
+                                    content: format!("Saved clipboard image to ./{} and appended link.", filename),
+                                });
+                                let link = format!(" [image](file://{})", path.to_string_lossy());
+                                self.input.push_str(&link);
+                            }
+                            Err(e) => {
+                                self.messages.push(Message {
+                                    role: "system".to_string(),
+                                    content: format!("Error saving image: {}", e),
+                                });
+                            }
+                        }
+                    } else {
+                        self.input.clear();
+                        self.auto_scroll.set(true);
+                        self.handle_submit(text);
+                    }
                 }
             }
             (_, KeyCode::Char(c)) => {
@@ -519,10 +660,22 @@ impl App {
     }
 
     fn handle_submit(&mut self, text: String) {
+        if text == "/edit" || text.starts_with("/edit ") {
+            let seed = if text.starts_with("/edit ") {
+                text.strip_prefix("/edit ").unwrap_or("").to_string()
+            } else {
+                String::new()
+            };
+            self.editor_requested = Some(seed);
+            return;
+        }
+
         if text.starts_with('/') {
             self.handle_slash(&text);
             return;
         }
+
+        self.submitted_text = Some(text.clone());
 
         self.messages.push(Message {
             role: "user".to_string(),
@@ -539,7 +692,7 @@ impl App {
         let tx = self.event_tx.clone();
         let agent = Arc::clone(&self.agent);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut agent = agent.lock().await;
             let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
             
@@ -558,10 +711,10 @@ impl App {
             }
             let _ = forwarder.await;
         });
+        self.agent_handle = Some(handle);
     }
 
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
-        self.auto_scroll.set(true);
         match event {
             AgentEvent::Thinking(text) => {
                 self.had_thinking = true;
@@ -640,6 +793,8 @@ impl App {
                 };
 
                 self.is_thinking = false;
+                self.agent_handle = None;
+                self.submitted_text = None;
                 self.remove_thinking();
 
                 // Show "Thought for Xs" (actual reasoning duration or 0.0s)
@@ -720,7 +875,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /quit       quit (session auto-saved)".to_string(),
+                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /image      insert clipboard image (macOS)\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /quit       quit (session auto-saved)".to_string(),
                 });
             }
             "/yolo" => {
@@ -898,10 +1053,10 @@ impl App {
                     }
                 } else {
                     // Toggle theme
-                    self.theme = if self.theme == "light" {
-                        "dark".to_string()
-                    } else {
+                    self.theme = if self.theme.eq_ignore_ascii_case("dark") {
                         "light".to_string()
+                    } else {
+                        "dark".to_string()
                     };
                     self.messages.push(Message {
                         role: "system".to_string(),
@@ -971,7 +1126,8 @@ pub async fn run_tui_with_session(
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -988,10 +1144,49 @@ pub async fn run_tui_with_session(
         if let Some(event) = event_handler.next().await {
             match event {
                 AppEvent::Key(key) => app.handle_key(key),
+                AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
                 AppEvent::Agent(agent_event) => app.handle_agent_event(agent_event),
                 AppEvent::Resize(_, _) => {}
+                AppEvent::Paste(text) => {
+                    if !app.is_thinking {
+                        app.handle_paste(text);
+                    }
+                }
                 AppEvent::Tick => {
                     app.tick_count = app.tick_count.wrapping_add(1);
+                }
+            }
+        }
+
+        if let Some(seed) = app.editor_requested.take() {
+            crossterm::terminal::disable_raw_mode()?;
+            crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::event::DisableMouseCapture,
+                crossterm::event::DisableBracketedPaste
+            )?;
+
+            let result = crate::clipboard::edit_text_in_editor(&seed);
+
+            crossterm::terminal::enable_raw_mode()?;
+            crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture,
+                crossterm::event::EnableBracketedPaste
+            )?;
+            terminal.clear()?;
+
+            match result {
+                Ok(new_text) => {
+                    app.input = new_text.trim_end().to_string();
+                }
+                Err(e) => {
+                    app.messages.push(Message {
+                        role: "system".to_string(),
+                        content: format!("Error running editor: {}", e),
+                    });
                 }
             }
         }
@@ -1005,7 +1200,8 @@ pub async fn run_tui_with_session(
     crossterm::execute!(
         std::io::stdout(),
         crossterm::terminal::LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture
+        crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -1074,4 +1270,79 @@ fn clean_output(s: &str) -> String {
         }
     }
     lines.join("\n")
+}
+
+fn try_parse_image_path(text: &str) -> Option<std::path::PathBuf> {
+    let trimmed = text.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(trimmed);
+
+    // Also support file:// URL
+    let path_str = if unquoted.starts_with("file://") {
+        unquoted.strip_prefix("file://").unwrap_or(unquoted)
+    } else {
+        unquoted
+    };
+
+    let path = std::path::PathBuf::from(path_str);
+    if path.exists() && path.is_file() {
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if ext_lower == "png"
+                || ext_lower == "jpg"
+                || ext_lower == "jpeg"
+                || ext_lower == "webp"
+                || ext_lower == "gif"
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+
+    #[test]
+    fn test_try_parse_image_path() {
+        let temp_dir = std::env::temp_dir();
+        
+        // Test non-existent file
+        let non_existent = temp_dir.join("non_existent_123456.png");
+        assert!(try_parse_image_path(&non_existent.to_string_lossy()).is_none());
+
+        // Test valid image file
+        let img_path = temp_dir.join("test_image_123456.png");
+        let _ = File::create(&img_path);
+        let parsed = try_parse_image_path(&img_path.to_string_lossy());
+        assert!(parsed.is_some());
+        assert_eq!(parsed.unwrap(), img_path);
+
+        // Test valid file with different extension (not image)
+        let txt_path = temp_dir.join("test_text_123456.txt");
+        let _ = File::create(&txt_path);
+        assert!(try_parse_image_path(&txt_path.to_string_lossy()).is_none());
+
+        // Test quoted path
+        let quoted = format!("\"{}\"", img_path.to_string_lossy());
+        let parsed_quoted = try_parse_image_path(&quoted);
+        assert!(parsed_quoted.is_some());
+        assert_eq!(parsed_quoted.unwrap(), img_path);
+
+        // Test file:// URL format
+        let url_format = format!("file://{}", img_path.to_string_lossy());
+        let parsed_url = try_parse_image_path(&url_format);
+        assert!(parsed_url.is_some());
+        assert_eq!(parsed_url.unwrap(), img_path);
+
+        // Cleanup
+        let _ = std::fs::remove_file(img_path);
+        let _ = std::fs::remove_file(txt_path);
+    }
 }

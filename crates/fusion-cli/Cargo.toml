@@ -17,3 +17,5 @@ fusion-llm = { path = "../fusion-llm" }
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+crossterm = { version = "0.28", features = ["bracketed-paste"] }
+
