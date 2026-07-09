@@ -7,6 +7,7 @@ pub mod shell;
 pub mod todo;
 pub mod search_web;
 pub mod fetch_url;
+pub mod glob;
 
 /// Tool registry — maps tool names to their execution logic.
 pub struct ToolRegistry {
@@ -36,6 +37,7 @@ impl ToolRegistry {
             "todo_write" => todo::execute(args),
             "search_web" => search_web::execute(args).await,
             "fetch_url" => fetch_url::execute(args).await,
+            "glob" => glob::execute(&self.cwd, args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -182,6 +184,21 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
                         "url": { "type": "string", "description": "The absolute URL to fetch" }
                     },
                     "required": ["url"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "glob",
+                "description": "Find files by glob pattern (e.g. src/**/*.rs or **/*.json) within the project.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Glob wildcard pattern to match (e.g. *.rs)" },
+                        "limit": { "type": "integer", "description": "Maximum file paths to return (default 100)" }
+                    },
+                    "required": ["pattern"]
                 }
             }
         }),
