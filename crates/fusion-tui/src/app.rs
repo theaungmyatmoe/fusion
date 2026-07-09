@@ -92,6 +92,9 @@ pub struct App {
 
     // Timing
     turn_start: Option<Instant>,
+    thought_duration: Option<f64>,
+    had_thinking: bool,
+    pub tick_count: u64,
 
     agent: Arc<Mutex<Agent>>,
     session: Session,
@@ -140,6 +143,9 @@ impl App {
             autocomplete_selected: 0,
             pending_model: None,
             turn_start: None,
+            thought_duration: None,
+            had_thinking: false,
+            tick_count: 0,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -201,6 +207,9 @@ impl App {
             autocomplete_selected: 0,
             pending_model: None,
             turn_start: None,
+            thought_duration: None,
+            had_thinking: false,
+            tick_count: 0,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -241,6 +250,23 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 self.save_session();
                 self.should_quit = true;
+            }
+            (_, KeyCode::BackTab) => {
+                // Shift+Tab cycles modes: Normal -> Plan -> Yolo
+                self.mode = match self.mode {
+                    AppMode::Normal => AppMode::Plan,
+                    AppMode::Plan => AppMode::Yolo,
+                    AppMode::Yolo => AppMode::Normal,
+                };
+                let new_mode = match self.mode {
+                    AppMode::Normal => "Normal",
+                    AppMode::Plan => "Plan (exploring only)",
+                    AppMode::Yolo => "Always-Approve (YOLO)",
+                };
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!("Mode switched to: {}", new_mode),
+                });
             }
             (_, KeyCode::Enter) => {
                 self.close_autocomplete();
@@ -483,6 +509,8 @@ impl App {
         self.save_session();
         self.is_thinking = true;
         self.turn_start = Some(Instant::now());
+        self.thought_duration = None;
+        self.had_thinking = false;
 
         let tx = self.event_tx.clone();
         let agent = Arc::clone(&self.agent);
@@ -508,6 +536,13 @@ impl App {
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Thinking(text) => {
+                self.had_thinking = true;
+                if self.thought_duration.is_none() {
+                    if let Some(start) = self.turn_start {
+                        self.thought_duration = Some(start.elapsed().as_secs_f64());
+                    }
+                }
+
                 let preview = if text.len() > 80 {
                     format!("{}…", &text[..80])
                 } else {
@@ -525,6 +560,12 @@ impl App {
                 });
             }
             AgentEvent::ToolCall { name, args_preview } => {
+                if self.thought_duration.is_none() {
+                    if let Some(start) = self.turn_start {
+                        self.thought_duration = Some(start.elapsed().as_secs_f64());
+                    }
+                }
+
                 self.remove_thinking();
                 let content = format!("[tool] {} {}", name, args_preview);
                 self.messages.push(Message {
@@ -545,18 +586,29 @@ impl App {
                 });
             }
             AgentEvent::FinalResponse(text) => {
-                // Calculate timing
+                if self.thought_duration.is_none() {
+                    if let Some(start) = self.turn_start {
+                        self.thought_duration = Some(start.elapsed().as_secs_f64());
+                    }
+                }
+
                 let turn_duration = self.turn_start
                     .map(|t| t.elapsed().as_secs_f64())
                     .unwrap_or(0.0);
 
+                let thought_duration = if self.had_thinking {
+                    self.thought_duration.unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+
                 self.is_thinking = false;
                 self.remove_thinking();
 
-                // Show "Thought for Xs" like Grok
+                // Show "Thought for Xs" (actual reasoning duration or 0.0s)
                 self.messages.push(Message {
                     role: "thought_time".to_string(),
-                    content: format!("{:.1}s", turn_duration),
+                    content: format!("{:.1}s", thought_duration),
                 });
 
                 self.messages.push(Message {
@@ -856,7 +908,9 @@ pub async fn run_tui_with_session(
                 AppEvent::Key(key) => app.handle_key(key),
                 AppEvent::Agent(agent_event) => app.handle_agent_event(agent_event),
                 AppEvent::Resize(_, _) => {}
-                AppEvent::Tick => {}
+                AppEvent::Tick => {
+                    app.tick_count = app.tick_count.wrapping_add(1);
+                }
             }
         }
 

@@ -155,26 +155,16 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
         match msg.role.as_str() {
             "user" => {
                 lines.push(Line::from(""));
-                // Grok-style box: colored left vertical line indicator + background highlight
-                let border_prefix = " \u{2503} "; // " ┃ " (vertical line)
-                let prefix = " \u{276f} ";        // " ❯ " (chevron)
+                // Grok-style box: no left vertical line, just background highlight with chevron
+                let prefix = " \u{276f} "; // " ❯ " (chevron)
                 let content = &msg.content;
-                let text_len = border_prefix.len() + prefix.len() + content.len();
+                let text_len = prefix.len() + content.len();
                 let trail = if width > text_len {
                     " ".repeat(width - text_len)
                 } else {
                     String::new()
                 };
                 lines.push(Line::from(vec![
-                    // Left vertical border (blue/accent color)
-                    Span::styled(
-                        border_prefix,
-                        Style::default()
-                            .fg(theme.header_color)
-                            .bg(theme.user_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    // Inner chevron
                     Span::styled(
                         prefix,
                         Style::default()
@@ -182,23 +172,19 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                             .bg(theme.user_bg)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    // Content text
                     Span::styled(
                         content.to_string(),
                         Style::default().fg(theme.user_fg).bg(theme.user_bg),
                     ),
-                    // Trail space to fill the line background
                     Span::styled(trail, Style::default().bg(theme.user_bg)),
                 ]));
             }
             "thought_time" => {
-                // "◆ Thought for Xs" like Grok CLI
+                // "◆ Thought for Xs" like Grok CLI (no italics)
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!("  \u{25c6} Thought for {}", msg.content),
-                    Style::default()
-                        .fg(theme.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(theme.dim),
                 )));
                 lines.push(Line::from(""));
             }
@@ -215,24 +201,27 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                 )));
             }
             "tool" => {
-                lines.push(Line::from(Span::styled(
-                    format!("    {}", msg.content),
-                    Style::default().fg(theme.dim),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                    Span::styled(&msg.content, Style::default().fg(theme.dim)),
+                ]));
             }
             "tool_result" => {
-                lines.push(Line::from(Span::styled(
-                    format!("    {}", msg.content),
-                    Style::default().fg(theme.dim),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                    Span::styled(&msg.content, Style::default().fg(theme.dim)),
+                ]));
             }
             "thinking" => {
-                lines.push(Line::from(Span::styled(
-                    format!("    thinking: {}", msg.content),
-                    Style::default()
-                        .fg(theme.dim)
-                        .add_modifier(Modifier::ITALIC),
-                )));
+                for line in msg.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                        Span::styled(
+                            format!("thinking: {}", line),
+                            Style::default().fg(theme.dim),
+                        ),
+                    ]));
+                }
             }
             "error" => {
                 lines.push(Line::from(Span::styled(
@@ -243,37 +232,57 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
             "system" => {
                 if msg.content.starts_with("Todos:") {
                     lines.push(Line::from(""));
-                    // "◆ Implementation Plan" header in yellow (bold_color)
-                    lines.push(Line::from(Span::styled(
-                        "  \u{25c6} Implementation Plan",
-                        Style::default()
-                            .fg(theme.bold_color)
-                            .add_modifier(Modifier::BOLD),
-                    )));
+                    // "┃  ◆ Implementation Plan" header
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                        Span::styled(
+                            "\u{25c6} Implementation Plan",
+                            Style::default()
+                                .fg(theme.bold_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
                     lines.push(Line::from(""));
                     for line in msg.content.lines().skip(1) {
                         let trimmed = line.trim();
                         if trimmed.is_empty() { continue; }
 
                         let (icon, text) = if trimmed.starts_with("✓") {
-                            ("  \u{2713} ", &trimmed[2..]) // checkmark
+                            (" \u{2713} ", &trimmed[2..]) // checkmark
                         } else if trimmed.starts_with("→") {
-                            ("  \u{2192} ", &trimmed[2..]) // arrow
+                            (" \u{2192} ", &trimmed[2..]) // arrow
                         } else {
-                            ("  \u{25cb} ", &trimmed[2..]) // circle
+                            (" \u{25cb} ", &trimmed[2..]) // circle
                         };
 
                         lines.push(Line::from(vec![
+                            Span::styled(" \u{2503}", Style::default().fg(theme.border)),
                             Span::styled(icon, Style::default().fg(theme.bold_color)),
                             Span::styled(text.to_string(), Style::default().fg(theme.label_color)),
                         ]));
                     }
+                } else if msg.content.contains("resumed session") {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                        Span::styled(
+                            "\u{25c6} Session Resumed",
+                            Style::default()
+                                .fg(theme.header_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                    for line in msg.content.lines() {
+                        lines.push(Line::from(vec![
+                            Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                            Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                        ]));
+                    }
                 } else {
                     for line in msg.content.lines() {
-                        lines.push(Line::from(Span::styled(
-                            format!("  {}", line),
-                            Style::default().fg(theme.dim),
-                        )));
+                        lines.push(Line::from(vec![
+                            Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                            Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                        ]));
                     }
                 }
             }
@@ -284,6 +293,21 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                 )));
             }
         }
+    }
+
+    // Animated thinking loader if the agent is actively processing
+    if app.is_thinking {
+        let frame = (app.tick_count / 2) % 3;
+        let loader = match frame {
+            0 => " [ \u{25a0} \u{22c5} \u{22c5} ]", // " [ ■ ⬝ ⬝ ] "
+            1 => " [ \u{22c5} \u{25a0} \u{22c5} ]", // " [ ⬝ ■ ⬝ ] "
+            _ => " [ \u{22c5} \u{22c5} \u{25a0} ]", // " [ ⬝ ⬝ ■ ] "
+        };
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  \u{25c6} Thought process", Style::default().fg(theme.dim)),
+            Span::styled(loader, Style::default().fg(theme.header_color)),
+        ]));
     }
 
     // Auto-scroll
