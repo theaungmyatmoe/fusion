@@ -399,11 +399,11 @@ fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
         let mut current_width = 0;
 
         for span in line.spans {
-            let text = span.content.as_ref();
+            let chars: Vec<char> = span.content.chars().collect();
             let style = span.style;
             let mut start = 0;
 
-            while start < text.len() {
+            while start < chars.len() {
                 let remaining = width.saturating_sub(current_width);
                 if remaining == 0 {
                     wrapped.push(Line::from(current_spans));
@@ -412,9 +412,9 @@ fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
                     continue;
                 }
 
-                let chunk_len = (text.len() - start).min(remaining);
-                let chunk = &text[start..start + chunk_len];
-                current_spans.push(Span::styled(chunk.to_string(), style));
+                let chunk_len = (chars.len() - start).min(remaining);
+                let chunk: String = chars[start..start + chunk_len].iter().collect();
+                current_spans.push(Span::styled(chunk, style));
                 current_width += chunk_len;
                 start += chunk_len;
             }
@@ -719,6 +719,66 @@ fn parse_inline_markdown(text: &str, theme: Theme) -> Vec<Span<'static>> {
     let mut buf = String::new();
 
     while pos < chars.len() {
+        // Parse image: ![alt](url)
+        if pos + 1 < chars.len() && chars[pos] == '!' && chars[pos + 1] == '[' {
+            let mut p = pos + 2;
+            let mut alt = String::new();
+            while p < chars.len() && chars[p] != ']' {
+                alt.push(chars[p]);
+                p += 1;
+            }
+            if p + 1 < chars.len() && chars[p] == ']' && chars[p + 1] == '(' {
+                p += 2;
+                let mut url = String::new();
+                while p < chars.len() && chars[p] != ')' {
+                    url.push(chars[p]);
+                    p += 1;
+                }
+                if p < chars.len() && chars[p] == ')' {
+                    if !buf.is_empty() {
+                        spans.push(Span::styled(buf.clone(), Style::default().fg(theme.label_color)));
+                        buf.clear();
+                    }
+                    spans.push(Span::styled(
+                        format!("🖼  [Image: {} ({})] ", alt, url),
+                        Style::default().fg(theme.header_color).add_modifier(Modifier::UNDERLINED),
+                    ));
+                    pos = p + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Parse link: [text](url)
+        if chars[pos] == '[' {
+            let mut p = pos + 1;
+            let mut link_text = String::new();
+            while p < chars.len() && chars[p] != ']' {
+                link_text.push(chars[p]);
+                p += 1;
+            }
+            if p + 1 < chars.len() && chars[p] == ']' && chars[p + 1] == '(' {
+                p += 2;
+                let mut url = String::new();
+                while p < chars.len() && chars[p] != ')' {
+                    url.push(chars[p]);
+                    p += 1;
+                }
+                if p < chars.len() && chars[p] == ')' {
+                    if !buf.is_empty() {
+                        spans.push(Span::styled(buf.clone(), Style::default().fg(theme.label_color)));
+                        buf.clear();
+                    }
+                    spans.push(Span::styled(
+                        format!("🔗 {} ({}) ", link_text, url),
+                        Style::default().fg(theme.header_color).add_modifier(Modifier::UNDERLINED),
+                    ));
+                    pos = p + 1;
+                    continue;
+                }
+            }
+        }
+
         if chars[pos] == '`' {
             if !buf.is_empty() {
                 spans.push(Span::styled(buf.clone(), Style::default().fg(theme.label_color)));
