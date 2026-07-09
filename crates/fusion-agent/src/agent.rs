@@ -82,7 +82,7 @@ impl Agent {
         for round in 0..max_rounds {
             // Pacing delay to avoid triggering Cloudflare burst rate limits during tool use
             if round > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
             }
 
             let options = ChatOptions {
@@ -126,8 +126,9 @@ impl Agent {
 
                 for tc in &result.tool_calls {
                     let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
-                    let preview = if args_str.len() > 200 {
-                        format!("{}...", &args_str[..200])
+                    let preview = if args_str.chars().count() > 200 {
+                        let truncated: String = args_str.chars().take(200).collect();
+                        format!("{}...", truncated)
                     } else {
                         args_str.clone()
                     };

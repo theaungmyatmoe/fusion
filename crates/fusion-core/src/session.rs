@@ -133,8 +133,9 @@ pub fn list_sessions() -> Result<Vec<SessionSummary>, FusionError> {
                     .iter()
                     .find(|m| m.role == "user")
                     .map(|m| {
-                        if m.content.len() > 60 {
-                            format!("{}…", &m.content[..60])
+                        if m.content.chars().count() > 60 {
+                            let truncated: String = m.content.chars().take(60).collect();
+                            format!("{}…", truncated)
                         } else {
                             m.content.clone()
                         }

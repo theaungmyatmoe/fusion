@@ -125,6 +125,31 @@ impl LlmClient {
         options: ChatOptions,
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
     ) -> Result<ChatResult, FusionError> {
+        let mut retries = 3;
+        let mut backoff = std::time::Duration::from_secs(3);
+
+        loop {
+            match self.chat_attempt(options.clone(), event_tx.clone()).await {
+                Ok(res) => return Ok(res),
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if retries > 0 && (err_msg.contains("429") || err_msg.contains("Too Many Requests")) {
+                        tokio::time::sleep(backoff).await;
+                        retries -= 1;
+                        backoff *= 2;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    async fn chat_attempt(
+        &self,
+        options: ChatOptions,
+        event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
+    ) -> Result<ChatResult, FusionError> {
         let account_id = self.config.cloudflare_account_id.clone().unwrap_or_default();
         let api_key = self.config.api_key.clone();
 

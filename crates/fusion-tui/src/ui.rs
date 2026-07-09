@@ -388,6 +388,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
 }
 
 fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
+    let width = width.max(1);
     let mut wrapped = Vec::new();
     for line in lines {
         if line.width() <= width {
@@ -404,15 +405,17 @@ fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
             let mut start = 0;
 
             while start < chars.len() {
-                let remaining = width.saturating_sub(current_width);
-                if remaining == 0 {
+                if current_width >= width {
                     wrapped.push(Line::from(current_spans));
                     current_spans = Vec::new();
                     current_width = 0;
-                    continue;
                 }
 
+                let remaining = width - current_width;
                 let chunk_len = (chars.len() - start).min(remaining);
+                if chunk_len == 0 {
+                    break;
+                }
                 let chunk: String = chars[start..start + chunk_len].iter().collect();
                 current_spans.push(Span::styled(chunk, style));
                 current_width += chunk_len;

@@ -611,8 +611,9 @@ impl App {
             }
             AgentEvent::ToolResult { name, output } => {
                 let cleaned = clean_output(&output);
-                let truncated = if cleaned.len() > 4000 {
-                    format!("{}…\n[output truncated — 4000 chars max]", &cleaned[..4000])
+                let truncated = if cleaned.chars().count() > 4000 {
+                    let truncated_str: String = cleaned.chars().take(4000).collect();
+                    format!("{}…\n[output truncated — 4000 chars max]", truncated_str)
                 } else {
                     cleaned
                 };

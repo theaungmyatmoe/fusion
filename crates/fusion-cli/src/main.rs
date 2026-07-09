@@ -186,7 +186,13 @@ async fn main() -> anyhow::Result<()> {
                         println!("{}", text);
                     }
                     fusion_agent::agent::AgentEvent::ToolCall { name, args_preview } => {
-                        eprintln!("[tool] {} {}", name, &args_preview[..args_preview.len().min(200)]);
+                        let preview_truncated = if args_preview.chars().count() > 200 {
+                            let truncated: String = args_preview.chars().take(200).collect();
+                            format!("{}...", truncated)
+                        } else {
+                            args_preview.clone()
+                        };
+                        eprintln!("[tool] {} {}", name, preview_truncated);
                     }
                     _ => {}
                 }
