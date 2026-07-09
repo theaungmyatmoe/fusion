@@ -123,7 +123,7 @@ impl App {
             .unwrap_or_else(|_| {
                 config.settings.get("theme")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("dark")
+                    .unwrap_or("light")
                     .to_string()
             });
 
@@ -187,7 +187,7 @@ impl App {
             .unwrap_or_else(|_| {
                 config.settings.get("theme")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("dark")
+                    .unwrap_or("light")
                     .to_string()
             });
 
@@ -666,7 +666,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /quit       quit (session auto-saved)".to_string(),
+                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /quit       quit (session auto-saved)".to_string(),
                 });
             }
             "/yolo" => {
@@ -824,6 +824,34 @@ impl App {
                     self.messages.push(Message {
                         role: "system".to_string(),
                         content: "Usage: /model <name>\nUse /models to see available.".to_string(),
+                    });
+                }
+            }
+            "/theme" | "/them" => {
+                if let Some(theme_name) = parts.get(1) {
+                    let cleaned = theme_name.trim().to_lowercase();
+                    if cleaned == "light" || cleaned == "dark" {
+                        self.theme = cleaned.clone();
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: format!("Theme switched to: {}", cleaned),
+                        });
+                    } else {
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: "Usage: /theme <light|dark>".to_string(),
+                        });
+                    }
+                } else {
+                    // Toggle theme
+                    self.theme = if self.theme == "light" {
+                        "dark".to_string()
+                    } else {
+                        "light".to_string()
+                    };
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: format!("Theme toggled to: {}", self.theme),
                     });
                 }
             }
