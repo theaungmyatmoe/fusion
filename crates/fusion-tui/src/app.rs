@@ -610,10 +610,11 @@ impl App {
                 self.session.push_message("tool", &content);
             }
             AgentEvent::ToolResult { name, output } => {
-                let truncated = if output.len() > 300 {
-                    format!("{}…", &output[..300])
+                let cleaned = clean_output(&output);
+                let truncated = if cleaned.len() > 300 {
+                    format!("{}…", &cleaned[..300])
                 } else {
-                    output
+                    cleaned
                 };
                 self.messages.push(Message {
                     role: "tool_result".to_string(),
@@ -1034,4 +1035,42 @@ fn trigger_desktop_notification(title: &str, message: &str) {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn trigger_desktop_notification(_title: &str, _message: &str) {
     // No-op fallback
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\x1b' {
+            i += 1;
+            if i < chars.len() && chars[i] == '[' {
+                i += 1;
+                while i < chars.len() {
+                    let c = chars[i];
+                    i += 1;
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
+fn clean_output(s: &str) -> String {
+    let stripped = strip_ansi(s);
+    let mut lines = Vec::new();
+    for line in stripped.lines() {
+        if let Some(pos) = line.rfind('\r') {
+            lines.push(line[pos + 1..].to_string());
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines.join("\n")
 }

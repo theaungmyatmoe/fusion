@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -361,9 +361,13 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
         ]));
     }
 
+    // Wrap lines manually to fit the viewport width
+    let wrap_width = (area.width as usize).saturating_sub(2);
+    let wrapped_lines = wrap_lines(lines, wrap_width);
+
     // Auto-scroll logic with internal mutability (via Cell)
     let visible_height = area.height as usize;
-    let total_lines = lines.len();
+    let total_lines = wrapped_lines.len();
     let max_scroll = total_lines.saturating_sub(visible_height);
 
     if app.auto_scroll.get() {
@@ -376,12 +380,50 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
         }
     }
 
-    let messages_widget = Paragraph::new(lines)
+    let messages_widget = Paragraph::new(wrapped_lines)
         .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false })
         .scroll((app.scroll_offset.get() as u16, 0));
 
     frame.render_widget(messages_widget, area);
+}
+
+fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
+    let mut wrapped = Vec::new();
+    for line in lines {
+        if line.width() <= width {
+            wrapped.push(line);
+            continue;
+        }
+
+        let mut current_spans = Vec::new();
+        let mut current_width = 0;
+
+        for span in line.spans {
+            let text = span.content.as_ref();
+            let style = span.style;
+            let mut start = 0;
+
+            while start < text.len() {
+                let remaining = width.saturating_sub(current_width);
+                if remaining == 0 {
+                    wrapped.push(Line::from(current_spans));
+                    current_spans = Vec::new();
+                    current_width = 0;
+                    continue;
+                }
+
+                let chunk_len = (text.len() - start).min(remaining);
+                let chunk = &text[start..start + chunk_len];
+                current_spans.push(Span::styled(chunk.to_string(), style));
+                current_width += chunk_len;
+                start += chunk_len;
+            }
+        }
+        if !current_spans.is_empty() {
+            wrapped.push(Line::from(current_spans));
+        }
+    }
+    wrapped
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
