@@ -5,6 +5,8 @@ pub mod grep;
 pub mod get_symbols;
 pub mod shell;
 pub mod todo;
+pub mod search_web;
+pub mod fetch_url;
 
 /// Tool registry — maps tool names to their execution logic.
 pub struct ToolRegistry {
@@ -32,6 +34,8 @@ impl ToolRegistry {
             "get_symbols" => get_symbols::execute(&self.cwd, args),
             "run_command" => shell::execute(&self.cwd, args).await,
             "todo_write" => todo::execute(args),
+            "search_web" => search_web::execute(args).await,
+            "fetch_url" => fetch_url::execute(args).await,
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -150,6 +154,34 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
                         }
                     },
                     "required": ["todos"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search the web for up-to-date documentation, API syntax, packages, or error solutions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "The search query string" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "fetch_url",
+                "description": "Download and read the clean text contents of a URL (webpage, API docs, JSON).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "The absolute URL to fetch" }
+                    },
+                    "required": ["url"]
                 }
             }
         }),
