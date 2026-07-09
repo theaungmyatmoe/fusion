@@ -172,7 +172,7 @@ impl LlmClient {
         // Construct request payload
         let mut body = serde_json::json!({
             "model": self.config.model,
-            "messages": options.messages,
+            "messages": serialize_messages(&options.messages),
             "temperature": options.temperature.unwrap_or(0.4),
             "stream": true,
         });
@@ -300,6 +300,49 @@ struct ToolCallBuilder {
     id: String,
     name: String,
     arguments: String,
+}
+
+fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
+    let mut serialized = Vec::new();
+    for msg in messages {
+        let mut map = serde_json::Map::new();
+        map.insert("role".to_string(), serde_json::json!(msg.role));
+        map.insert("content".to_string(), serde_json::json!(msg.content));
+
+        if let Some(ref name) = msg.name {
+            map.insert("name".to_string(), serde_json::json!(name));
+        }
+
+        if let Some(ref tool_call_id) = msg.tool_call_id {
+            map.insert("tool_call_id".to_string(), serde_json::json!(tool_call_id));
+        }
+
+        if let Some(ref tool_calls) = msg.tool_calls {
+            let mut tc_arr = Vec::new();
+            for tc in tool_calls {
+                let mut tc_map = serde_json::Map::new();
+                tc_map.insert("id".to_string(), serde_json::json!(tc.id));
+                tc_map.insert("type".to_string(), serde_json::json!("function"));
+
+                let mut func_map = serde_json::Map::new();
+                func_map.insert("name".to_string(), serde_json::json!(tc.name));
+                
+                let args_str = if tc.arguments.is_string() {
+                    tc.arguments.as_str().unwrap_or_default().to_string()
+                } else {
+                    serde_json::to_string(&tc.arguments).unwrap_or_default()
+                };
+                func_map.insert("arguments".to_string(), serde_json::json!(args_str));
+
+                tc_map.insert("function".to_string(), serde_json::Value::Object(func_map));
+                tc_arr.push(serde_json::Value::Object(tc_map));
+            }
+            map.insert("tool_calls".to_string(), serde_json::Value::Array(tc_arr));
+        }
+
+        serialized.push(serde_json::Value::Object(map));
+    }
+    serde_json::Value::Array(serialized)
 }
 
 /// Convenience constructor.
