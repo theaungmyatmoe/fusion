@@ -67,7 +67,12 @@ impl Agent {
         let tool_schemas = build_tool_schemas();
         let max_rounds = 10;
 
-        for _round in 0..max_rounds {
+        for round in 0..max_rounds {
+            // Pacing delay to avoid triggering Cloudflare burst rate limits during tool use
+            if round > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            }
+
             let options = ChatOptions {
                 messages: self.messages.clone(),
                 tools: Some(tool_schemas.clone()),
