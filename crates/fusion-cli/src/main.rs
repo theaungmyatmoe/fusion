@@ -1,5 +1,6 @@
 use clap::Parser;
 use fusion_core::config::{is_termux, load_config};
+use fusion_core::session::Session;
 use std::path::PathBuf;
 
 /// Fusion — mobile-first AI coding agent for Termux (and terminals).
@@ -31,6 +32,18 @@ struct Cli {
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
 
+    /// Resume a previous session by ID (or first 8 chars)
+    #[arg(long)]
+    resume: Option<String>,
+
+    /// Resume the most recent session
+    #[arg(long)]
+    last: bool,
+
+    /// List recent sessions and exit
+    #[arg(long)]
+    sessions: bool,
+
     /// Remaining arguments form an initial prompt
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
@@ -50,7 +63,6 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("config warning: {}", e))
         .unwrap_or_else(|e| {
             eprintln!("{}", e);
-            // Return a minimal default config
             fusion_core::config::Config {
                 provider: fusion_core::config::Provider::Cloudflare,
                 model: "@cf/moonshotai/kimi-k2.7-code".to_string(),
@@ -72,6 +84,86 @@ async fn main() -> anyhow::Result<()> {
         config.yolo = true;
     }
 
+    // List sessions and exit
+    if cli.sessions {
+        match fusion_core::session::list_sessions() {
+            Ok(sessions) => {
+                if sessions.is_empty() {
+                    println!("No saved sessions.");
+                } else {
+                    println!("Recent sessions:");
+                    for (i, s) in sessions.iter().take(20).enumerate() {
+                        let age = format_age(s.updated_at);
+                        println!(
+                            "  {}. {} ({} msgs, {}) {}",
+                            i + 1,
+                            &s.id[..8.min(s.id.len())],
+                            s.message_count,
+                            age,
+                            s.preview
+                        );
+                    }
+                    println!();
+                    println!("Resume: fusion --resume <id>");
+                }
+            }
+            Err(e) => {
+                eprintln!("Error listing sessions: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    // Resolve session for resume
+    let resume_session = if cli.last {
+        match Session::load_last() {
+            Ok(session) => {
+                eprintln!("Resuming session {}…", session.short_id());
+                Some(session)
+            }
+            Err(e) => {
+                eprintln!("Cannot resume: {}", e);
+                None
+            }
+        }
+    } else if let Some(ref id) = cli.resume {
+        // Try exact match, then prefix match
+        match Session::load(id) {
+            Ok(session) => Some(session),
+            Err(_) => {
+                // Try prefix match against all sessions
+                match fusion_core::session::list_sessions() {
+                    Ok(sessions) => {
+                        let matched = sessions.iter().find(|s| s.id.starts_with(id));
+                        match matched {
+                            Some(s) => match Session::load(&s.id) {
+                                Ok(session) => {
+                                    eprintln!("Resuming session {}…", session.short_id());
+                                    Some(session)
+                                }
+                                Err(e) => {
+                                    eprintln!("Cannot resume {}: {}", id, e);
+                                    None
+                                }
+                            },
+                            None => {
+                                eprintln!("Session '{}' not found. Use --sessions to list.", id);
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        None
+                    }
+                }
+            }
+        }
+    } else {
+        None
+    };
+
     // Headless mode
     let prompt = cli
         .prompt
@@ -84,7 +176,6 @@ async fn main() -> anyhow::Result<()> {
         });
 
     if let Some(prompt_text) = prompt {
-        // Headless: run agent once and print result
         let cwd = current_dir.to_string_lossy().to_string();
         let mut agent = fusion_agent::agent::Agent::new(&config, cwd);
         match agent.process(&prompt_text).await {
@@ -114,18 +205,33 @@ async fn main() -> anyhow::Result<()> {
     let use_simple = cli.simple || (termux && !cli.tui);
 
     if use_simple {
-        // Simple REPL — stays in normal scrollback
         if termux {
             println!("fusion — Termux detected. Using lightweight REPL.");
         }
         fusion_tui::simple::run_simple(&config).await?;
     } else {
-        // Rich Ratatui TUI
         if termux {
             eprintln!("Note: Running rich TUI on Termux. Use --simple if cramped.");
         }
-        fusion_tui::app::run_tui(&config).await?;
+        fusion_tui::app::run_tui_with_session(&config, resume_session).await?;
     }
 
     Ok(())
+}
+
+fn format_age(epoch_secs: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let diff = now.saturating_sub(epoch_secs);
+    if diff < 60 {
+        "just now".to_string()
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
+    }
 }

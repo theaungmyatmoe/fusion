@@ -4,6 +4,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use fusion_agent::agent::{Agent, AgentEvent};
 use fusion_core::config::Config;
+use fusion_core::session::{Session, list_sessions};
 
 use crate::event::{AppEvent, EventHandler};
 use crate::ui;
@@ -31,8 +32,10 @@ pub struct App {
     pub model: String,
     pub is_thinking: bool,
     pub should_quit: bool,
+    pub session_id: String,
 
     agent: Arc<Mutex<Agent>>,
+    session: Session,
     event_tx: mpsc::UnboundedSender<AppEvent>,
 }
 
@@ -48,11 +51,14 @@ impl App {
             AppMode::Normal
         };
 
+        let session = Session::new(&cwd, &config.model);
+        let session_id = session.short_id().to_string();
+
         let mut messages = vec![Message {
             role: "system".to_string(),
             content: format!(
-                "fusion — mobile-first AI coding agent\nmodel: {}  │  /help for commands",
-                config.model
+                "fusion — mobile-first AI coding agent\nmodel: {}  │  session: {}  │  /help for commands",
+                config.model, session_id
             ),
         }];
 
@@ -70,7 +76,55 @@ impl App {
             model: config.model.clone(),
             is_thinking: false,
             should_quit: false,
+            session_id,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
+            session,
+            event_tx,
+        }
+    }
+
+    /// Create from a resumed session.
+    pub fn from_session(
+        config: &Config,
+        session: Session,
+        event_tx: mpsc::UnboundedSender<AppEvent>,
+    ) -> Self {
+        let cwd = session.cwd.clone();
+        let session_id = session.short_id().to_string();
+
+        let mut messages = vec![Message {
+            role: "system".to_string(),
+            content: format!(
+                "fusion — resumed session {}  │  {} messages  │  /help for commands",
+                session_id,
+                session.messages.len()
+            ),
+        }];
+
+        // Replay session messages as visible messages
+        for msg in &session.messages {
+            messages.push(Message {
+                role: msg.role.clone(),
+                content: msg.content.clone(),
+            });
+        }
+
+        let mode = if config.yolo {
+            AppMode::Yolo
+        } else {
+            AppMode::Normal
+        };
+
+        Self {
+            messages,
+            input: String::new(),
+            mode,
+            model: config.model.clone(),
+            is_thinking: false,
+            should_quit: false,
+            session_id,
+            agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
+            session,
             event_tx,
         }
     }
@@ -79,6 +133,7 @@ impl App {
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                self.save_session();
                 self.should_quit = true;
             }
             (_, KeyCode::Enter) => {
@@ -111,9 +166,13 @@ impl App {
             content: text.clone(),
         });
 
+        // Save to session
+        self.session.push_message("user", &text);
+        self.save_session();
+
         self.is_thinking = true;
 
-        // Spawn agent processing in background using Arc<Mutex<>>
+        // Spawn agent processing in background
         let tx = self.event_tx.clone();
         let agent = Arc::clone(&self.agent);
 
@@ -139,13 +198,11 @@ impl App {
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Thinking(text) => {
-                // Show a brief, truncated thinking preview — not the full raw reasoning
                 let preview = if text.len() > 80 {
                     format!("{}…", &text[..80])
                 } else {
                     text
                 };
-                // Replace any existing thinking message instead of appending
                 if let Some(last) = self.messages.last_mut() {
                     if last.role == "thinking" {
                         last.content = preview;
@@ -158,12 +215,13 @@ impl App {
                 });
             }
             AgentEvent::ToolCall { name, args_preview } => {
-                // Remove thinking message when tools start
                 self.remove_thinking();
+                let content = format!("⚙ {} {}", name, args_preview);
                 self.messages.push(Message {
                     role: "tool".to_string(),
-                    content: format!("⚙ {} {}", name, args_preview),
+                    content: content.clone(),
                 });
+                self.session.push_message("tool", &content);
             }
             AgentEvent::ToolResult { name, output } => {
                 let truncated = if output.len() > 300 {
@@ -178,12 +236,14 @@ impl App {
             }
             AgentEvent::FinalResponse(text) => {
                 self.is_thinking = false;
-                // Remove thinking message when final response arrives
                 self.remove_thinking();
                 self.messages.push(Message {
                     role: "assistant".to_string(),
-                    content: text,
+                    content: text.clone(),
                 });
+                // Save assistant response to session
+                self.session.push_message("assistant", &text);
+                self.save_session();
             }
             AgentEvent::TodoUpdate(todos) => {
                 let list: String = todos
@@ -206,9 +266,15 @@ impl App {
         }
     }
 
-    /// Remove any "thinking" messages from the transcript.
     fn remove_thinking(&mut self) {
         self.messages.retain(|m| m.role != "thinking");
+    }
+
+    fn save_session(&self) {
+        if let Err(e) = self.session.save() {
+            // Silent fail — don't crash the TUI for session save errors
+            eprintln!("session save error: {}", e);
+        }
     }
 
     fn handle_slash(&mut self, cmd: &str) {
@@ -218,7 +284,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion commands:\n  /help     this help\n  /yolo     toggle auto-approve\n  /plan     enter plan mode\n  /model <name>  switch model\n  /status   current settings\n  /clear    clear messages\n  /exit     quit".to_string(),
+                    content: "Fusion commands:\n  /help       this help\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model\n  /status     current settings\n  /sessions   list saved sessions\n  /session    show current session ID\n  /clear      clear messages\n  /exit       quit (session auto-saved)".to_string(),
                 });
             }
             "/yolo" => {
@@ -251,6 +317,54 @@ impl App {
                     content: "Cleared.".to_string(),
                 });
             }
+            "/session" | "/sid" => {
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!(
+                        "Session: {}\nMessages: {}\nResume with: fusion --resume {}",
+                        self.session.id,
+                        self.session.messages.len(),
+                        self.session.short_id()
+                    ),
+                });
+            }
+            "/sessions" | "/history" => {
+                match list_sessions() {
+                    Ok(sessions) => {
+                        if sessions.is_empty() {
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: "No saved sessions.".to_string(),
+                            });
+                        } else {
+                            let mut lines = vec!["Recent sessions:".to_string()];
+                            for (i, s) in sessions.iter().take(10).enumerate() {
+                                let age = format_age(s.updated_at);
+                                lines.push(format!(
+                                    "  {}. {} ({} msgs, {}) {}",
+                                    i + 1,
+                                    &s.id[..8.min(s.id.len())],
+                                    s.message_count,
+                                    age,
+                                    s.preview
+                                ));
+                            }
+                            lines.push(String::new());
+                            lines.push("Resume with: fusion --resume <id>".to_string());
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: lines.join("\n"),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.messages.push(Message {
+                            role: "error".to_string(),
+                            content: format!("Failed to list sessions: {}", e),
+                        });
+                    }
+                }
+            }
             "/status" => {
                 let mode_str = match self.mode {
                     AppMode::Normal => "Normal",
@@ -259,10 +373,14 @@ impl App {
                 };
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: format!("model: {}  mode: {}", self.model, mode_str),
+                    content: format!(
+                        "model: {}  mode: {}  session: {}",
+                        self.model, mode_str, self.session_id
+                    ),
                 });
             }
             "/exit" | "/quit" | "/q" => {
+                self.save_session();
                 self.should_quit = true;
             }
             _ if lower.starts_with("/model ") => {
@@ -285,8 +403,33 @@ impl App {
     }
 }
 
+fn format_age(epoch_secs: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let diff = now.saturating_sub(epoch_secs);
+    if diff < 60 {
+        "just now".to_string()
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
+    }
+}
+
 /// Run the full Ratatui TUI.
 pub async fn run_tui(config: &Config) -> anyhow::Result<()> {
+    run_tui_with_session(config, None).await
+}
+
+/// Run TUI with optional session resume.
+pub async fn run_tui_with_session(
+    config: &Config,
+    resume_session: Option<Session>,
+) -> anyhow::Result<()> {
     // Setup terminal
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -300,7 +443,10 @@ pub async fn run_tui(config: &Config) -> anyhow::Result<()> {
 
     // Event handler
     let (mut event_handler, event_tx) = EventHandler::new(100);
-    let mut app = App::new(config, event_tx);
+    let mut app = match resume_session {
+        Some(session) => App::from_session(config, session, event_tx),
+        None => App::new(config, event_tx),
+    };
 
     // Main loop
     loop {
@@ -314,12 +460,8 @@ pub async fn run_tui(config: &Config) -> anyhow::Result<()> {
                 AppEvent::Agent(agent_event) => {
                     app.handle_agent_event(agent_event);
                 }
-                AppEvent::Resize(_, _) => {
-                    // Ratatui handles resize automatically on next draw
-                }
-                AppEvent::Tick => {
-                    // Could update spinner animation here
-                }
+                AppEvent::Resize(_, _) => {}
+                AppEvent::Tick => {}
             }
         }
 

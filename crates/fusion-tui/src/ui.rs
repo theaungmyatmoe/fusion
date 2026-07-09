@@ -203,13 +203,19 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ));
 
-    let input_text = Paragraph::new(app.input.as_str())
-        .block(input_block)
-        .style(Style::default().fg(Color::White));
+    // Use explicit Line + Span so the text color is never lost
+    let input_line = Line::from(Span::styled(
+        app.input.clone(),
+        Style::default()
+            .fg(Color::Rgb(255, 255, 255))
+            .add_modifier(Modifier::BOLD),
+    ));
 
-    frame.render_widget(input_text, area);
+    let input_widget = Paragraph::new(input_line).block(input_block);
 
-    // Position cursor
+    frame.render_widget(input_widget, area);
+
+    // Position cursor inside the block (border takes 1 cell)
     if !app.is_thinking {
         let cursor_x = area.x + 1 + app.input.len() as u16;
         let cursor_y = area.y + 1;
