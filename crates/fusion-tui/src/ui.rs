@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, AppMode, AutocompleteMode};
+use serde_json;
 
 // ── Theme Struct for Light & Dark Modes ─────────────────────────────────────
 
@@ -201,16 +202,66 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                 )));
             }
             "tool" => {
-                lines.push(Line::from(vec![
-                    Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
-                    Span::styled(&msg.content, Style::default().fg(theme.dim)),
-                ]));
+                let content = &msg.content;
+                let parsed = if content.starts_with("[tool] ") {
+                    let parts: Vec<&str> = content[7..].splitn(2, ' ').collect();
+                    if parts.len() == 2 {
+                        let name = parts[0];
+                        let args = parts[1];
+                        let display_cmd = if name == "run_command" {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                                v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args.to_string())
+                            } else {
+                                args.to_string()
+                            }
+                        } else {
+                            args.to_string()
+                        };
+                        Some((name, display_cmd))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some((name, cmd)) = parsed {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("  ┌── [tool: {}]", name),
+                        Style::default().fg(theme.dim),
+                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled("  │ ", Style::default().fg(theme.dim)),
+                        Span::styled(format!("$ {}", cmd), Style::default().fg(theme.code_fg).add_modifier(Modifier::BOLD)),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{2503}  ", Style::default().fg(theme.border)),
+                        Span::styled(content, Style::default().fg(theme.dim)),
+                    ]));
+                }
             }
             "tool_result" => {
-                lines.push(Line::from(vec![
-                    Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
-                    Span::styled(&msg.content, Style::default().fg(theme.dim)),
-                ]));
+                let content = &msg.content;
+                let display_output = if content.contains(" → ") {
+                    let parts: Vec<&str> = content.splitn(2, " → ").collect();
+                    parts[1]
+                } else {
+                    content
+                };
+
+                for line in display_output.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  │ ", Style::default().fg(theme.dim)),
+                        Span::styled(line.to_string(), Style::default().fg(theme.code_block_fg).bg(theme.code_bg)),
+                    ]));
+                }
+                lines.push(Line::from(Span::styled(
+                    "  └──",
+                    Style::default().fg(theme.dim),
+                )));
+                lines.push(Line::from(""));
             }
             "thinking" => {
                 for line in msg.content.lines() {
@@ -310,19 +361,25 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
         ]));
     }
 
-    // Auto-scroll
+    // Auto-scroll logic with internal mutability (via Cell)
     let visible_height = area.height as usize;
     let total_lines = lines.len();
-    let scroll_offset = if total_lines > visible_height {
-        (total_lines - visible_height) as u16
+    let max_scroll = total_lines.saturating_sub(visible_height);
+
+    if app.auto_scroll.get() {
+        app.scroll_offset.set(max_scroll);
     } else {
-        0
-    };
+        let current = app.scroll_offset.get().min(max_scroll);
+        app.scroll_offset.set(current);
+        if current >= max_scroll {
+            app.auto_scroll.set(true);
+        }
+    }
 
     let messages_widget = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
+        .scroll((app.scroll_offset.get() as u16, 0));
 
     frame.render_widget(messages_widget, area);
 }

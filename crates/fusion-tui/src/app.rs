@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
 use std::time::Instant;
+use std::cell::Cell;
 use tokio::sync::{mpsc, Mutex};
 
 use fusion_agent::agent::{Agent, AgentEvent};
@@ -95,6 +96,8 @@ pub struct App {
     thought_duration: Option<f64>,
     had_thinking: bool,
     pub tick_count: u64,
+    pub scroll_offset: Cell<usize>,
+    pub auto_scroll: Cell<bool>,
 
     agent: Arc<Mutex<Agent>>,
     session: Session,
@@ -146,6 +149,8 @@ impl App {
             thought_duration: None,
             had_thinking: false,
             tick_count: 0,
+            scroll_offset: Cell::new(0),
+            auto_scroll: Cell::new(true),
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -210,6 +215,8 @@ impl App {
             thought_duration: None,
             had_thinking: false,
             tick_count: 0,
+            scroll_offset: Cell::new(0),
+            auto_scroll: Cell::new(true),
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -251,6 +258,22 @@ impl App {
                 self.save_session();
                 self.should_quit = true;
             }
+            (_, KeyCode::Up) => {
+                self.auto_scroll.set(false);
+                self.scroll_offset.set(self.scroll_offset.get().saturating_sub(1));
+            }
+            (_, KeyCode::Down) => {
+                self.auto_scroll.set(false);
+                self.scroll_offset.set(self.scroll_offset.get().saturating_add(1));
+            }
+            (_, KeyCode::PageUp) => {
+                self.auto_scroll.set(false);
+                self.scroll_offset.set(self.scroll_offset.get().saturating_sub(10));
+            }
+            (_, KeyCode::PageDown) => {
+                self.auto_scroll.set(false);
+                self.scroll_offset.set(self.scroll_offset.get().saturating_add(10));
+            }
             (_, KeyCode::BackTab) => {
                 // Shift+Tab cycles modes: Normal -> Plan -> Yolo
                 self.mode = match self.mode {
@@ -273,6 +296,7 @@ impl App {
                 let text = self.input.trim().to_string();
                 if !text.is_empty() {
                     self.input.clear();
+                    self.auto_scroll.set(true);
                     self.handle_submit(text);
                 }
             }
@@ -537,6 +561,7 @@ impl App {
     }
 
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
+        self.auto_scroll.set(true);
         match event {
             AgentEvent::Thinking(text) => {
                 self.had_thinking = true;

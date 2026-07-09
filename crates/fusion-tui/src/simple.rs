@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Write};
+use std::io::Write;
 
 use fusion_agent::agent::{Agent, AgentEvent};
 use fusion_core::config::Config;
@@ -44,23 +44,33 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
     println!();
 
     let mut agent = Agent::new(config, cwd);
-    let stdin = io::stdin();
+    let mut rl = rustyline::DefaultEditor::new()?;
     let mut yolo = config.yolo;
     let mut current_mode = mode.to_string();
 
     loop {
-        print!("\x1b[38;2;124;58;237;1mz>\x1b[0m ");
-        io::stdout().flush()?;
-
-        let mut line = String::new();
-        if stdin.lock().read_line(&mut line)? == 0 {
-            break; // EOF
-        }
+        let readline = rl.readline("\x1b[38;2;124;58;237;1mz>\x1b[0m ");
+        let line = match readline {
+            Ok(line) => line,
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                println!("\x1b[90mbye (Ctrl+C)\x1b[0m");
+                break;
+            }
+            Err(rustyline::error::ReadlineError::Eof) => {
+                println!("\x1b[90mbye (Ctrl+D)\x1b[0m");
+                break;
+            }
+            Err(err) => {
+                println!("\x1b[31mReadline error:\x1b[0m {:?}", err);
+                break;
+            }
+        };
 
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
+        let _ = rl.add_history_entry(trimmed);
 
         // Slash commands
         if trimmed.starts_with('/') {
