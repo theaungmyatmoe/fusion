@@ -1,28 +1,46 @@
+use async_openai::{
+    config::OpenAIConfig,
+    types::{
+        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
+        ChatCompletionRequestUserMessage, ChatCompletionRequestAssistantMessage,
+        CreateChatCompletionRequestArgs,
+    },
+    Client,
+};
 use fusion_core::config::Config;
 use fusion_core::error::FusionError;
-use reqwest::Client;
-
 use crate::client::{ChatOptions, ChatResult, ToolCall};
 
-/// Client for Cloudflare Workers AI REST API.
+/// Client for Cloudflare Workers AI REST API using the OpenAI-compatible v1 endpoint.
 pub struct CloudflareClient {
-    http: Client,
+    client: Client<OpenAIConfig>,
+    model: String,
     account_id: String,
     api_key: String,
-    model: String,
 }
 
 impl CloudflareClient {
     pub fn new(config: &Config) -> Self {
-        let http = Client::builder()
+        let account_id = config.cloudflare_account_id.clone().unwrap_or_default();
+        let api_base = format!(
+            "https://api.cloudflare.com/client/v4/accounts/{}/ai/v1",
+            account_id
+        );
+
+        let oai_config = OpenAIConfig::new()
+            .with_api_key(&config.api_key)
+            .with_api_base(&api_base);
+
+        let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .unwrap_or_else(|_| Client::new());
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
-            http,
-            account_id: config.cloudflare_account_id.clone().unwrap_or_default(),
-            api_key: config.api_key.clone(),
+            client: Client::with_config(oai_config).with_http_client(http_client),
             model: config.model.clone(),
+            account_id,
+            api_key: config.api_key.clone(),
         }
     }
 
@@ -44,170 +62,113 @@ impl CloudflareClient {
             ));
         }
 
-        let url = format!(
-            "https://api.cloudflare.com/client/v4/accounts/{}/ai/run/{}",
-            self.account_id, self.model
-        );
+        let messages: Vec<ChatCompletionRequestMessage> = options
+            .messages
+            .iter()
+            .map(|m| match m.role.as_str() {
+                "system" => ChatCompletionRequestMessage::System(
+                    ChatCompletionRequestSystemMessage {
+                        content: m.content.clone().into(),
+                        name: m.name.clone(),
+                        ..Default::default()
+                    },
+                ),
+                "user" => {
+                    ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+                        content: m.content.clone().into(),
+                        name: m.name.clone(),
+                        ..Default::default()
+                    })
+                }
+                "assistant" => ChatCompletionRequestMessage::Assistant(
+                    ChatCompletionRequestAssistantMessage {
+                        content: Some(m.content.clone().into()),
+                        ..Default::default()
+                    },
+                ),
+                _ => ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+                    content: m.content.clone().into(),
+                    name: m.name.clone(),
+                    ..Default::default()
+                }),
+            })
+            .collect();
 
-        let mut body = serde_json::json!({
-            "messages": options.messages,
-            "temperature": options.temperature.unwrap_or(0.6),
-        });
+        let mut req_builder = CreateChatCompletionRequestArgs::default();
+        req_builder.model(&self.model).messages(messages);
 
-        if let Some(max_tokens) = options.max_tokens {
-            body["max_tokens"] = serde_json::json!(max_tokens);
+        if let Some(temp) = options.temperature {
+            req_builder.temperature(temp);
         }
+        if let Some(max) = options.max_tokens {
+            req_builder.max_tokens(max);
+        }
+
+        // Handle tool definitions
         if let Some(ref tools) = options.tools {
-            body["tools"] = serde_json::json!(tools);
+            if let Ok(val) = serde_json::from_value::<Vec<async_openai::types::ChatCompletionTool>>(serde_json::Value::Array(tools.clone())) {
+                req_builder.tools(val);
+            }
         }
 
-        // Retry loop with exponential backoff for rate limits and transient connection errors
-        let max_retries = 3u32;
+        let request = req_builder
+            .build()
+            .map_err(|e| FusionError::Llm(format!("Request build error: {}", e)))?;
+
+        // Execute request with retries
+        let max_retries = 3;
         let mut last_err = String::new();
 
         for attempt in 0..=max_retries {
-            let resp_res = self
-                .http
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await;
+            match self.client.chat().create(request.clone()).await {
+                Ok(response) => {
+                    let choice = response
+                        .choices
+                        .first()
+                        .ok_or_else(|| FusionError::Llm("No choices in response".into()))?;
 
-            let resp = match resp_res {
-                Ok(r) => r,
+                    let content = choice
+                        .message
+                        .content
+                        .clone()
+                        .unwrap_or_default();
+
+                    let tool_calls = choice
+                        .message
+                        .tool_calls
+                        .as_ref()
+                        .map(|tcs| {
+                            tcs.iter()
+                                .map(|tc| ToolCall {
+                                    id: tc.id.clone(),
+                                    name: tc.function.name.clone(),
+                                    arguments: serde_json::from_str(&tc.function.arguments)
+                                        .unwrap_or(serde_json::Value::Object(Default::default())),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    return Ok(ChatResult {
+                        content,
+                        reasoning_content: None,
+                        tool_calls,
+                    });
+                }
                 Err(e) => {
-                    last_err = format!("HTTP error: {}", e);
+                    last_err = format!("Cloudflare API error: {}", e);
                     if attempt < max_retries {
                         let delay_secs = 2u64.pow(attempt + 1);
                         tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                        continue;
-                    } else {
-                        return Err(FusionError::Llm(format!(
-                            "Connection failed after {} attempts. Error: {}",
-                            max_retries + 1,
-                            last_err
-                        )));
                     }
                 }
-            };
-
-            let status = resp.status();
-
-            if status.as_u16() == 429 {
-                // Rate limited — check retry-after header if present, fallback to exponential backoff
-                let mut delay_secs = 2u64.pow(attempt + 1); // 2s, 4s, 8s, 16s
-                if let Some(header_val) = resp.headers().get("retry-after") {
-                    if let Ok(val_str) = header_val.to_str() {
-                        if let Ok(parsed_secs) = val_str.parse::<u64>() {
-                            delay_secs = parsed_secs;
-                        }
-                    }
-                }
-
-                if attempt < max_retries {
-                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                    continue;
-                } else {
-                    return Err(FusionError::Llm(
-                        "Rate limited by Cloudflare (429). Tried 3 retries. \
-                         Wait a moment and try again, or switch models with /model."
-                            .into(),
-                    ));
-                }
             }
-
-            if !status.is_success() {
-                let text = resp.text().await.unwrap_or_default();
-                // Extract a clean error message from the JSON if possible
-                let clean_msg = serde_json::from_str::<serde_json::Value>(&text)
-                    .ok()
-                    .and_then(|v| {
-                        v["errors"][0]["message"]
-                            .as_str()
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| {
-                        if text.len() > 200 {
-                            format!("{}...", &text[..200])
-                        } else {
-                            text
-                        }
-                    });
-                return Err(FusionError::Llm(format!(
-                    "Cloudflare API error ({}): {}",
-                    status.as_u16(), clean_msg
-                )));
-            }
-
-            // Success — parse the response
-            let data: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| FusionError::Llm(format!("JSON parse error: {}", e)))?;
-
-            let content = data
-                .pointer("/result/choices/0/message/content")
-                .and_then(|v| v.as_str())
-                .or_else(|| data.pointer("/result/response").and_then(|v| v.as_str()))
-                .or_else(|| data.pointer("/result/text").and_then(|v| v.as_str()))
-                .or_else(|| data["result"].as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let reasoning_content = data
-                .pointer("/result/choices/0/message/reasoning_content")
-                .or_else(|| data.pointer("/result/choices/0/message/reasoning"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            let tool_calls = parse_tool_calls(
-                data.pointer("/result/choices/0/message/tool_calls"),
-            );
-
-            return Ok(ChatResult {
-                content,
-                reasoning_content,
-                tool_calls,
-            });
         }
 
-        Err(FusionError::Llm(last_err))
+        Err(FusionError::Llm(format!(
+            "Cloudflare request failed after {} attempts. Error: {}",
+            max_retries + 1,
+            last_err
+        )))
     }
-}
-
-fn parse_tool_calls(value: Option<&serde_json::Value>) -> Vec<ToolCall> {
-    let Some(arr) = value.and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-
-    arr.iter()
-        .filter_map(|tc| {
-            let id = tc["id"].as_str().unwrap_or("").to_string();
-            let name = tc["function"]["name"]
-                .as_str()
-                .or_else(|| tc["name"].as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let arguments = if let Some(args_str) = tc["function"]["arguments"].as_str() {
-                serde_json::from_str(args_str).unwrap_or(serde_json::Value::Object(Default::default()))
-            } else if let Some(args) = tc["arguments"].as_str() {
-                serde_json::from_str(args).unwrap_or(serde_json::Value::Object(Default::default()))
-            } else {
-                serde_json::Value::Object(Default::default())
-            };
-
-            if name.is_empty() {
-                None
-            } else {
-                Some(ToolCall {
-                    id,
-                    name,
-                    arguments,
-                })
-            }
-        })
-        .collect()
 }
