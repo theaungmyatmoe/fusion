@@ -112,7 +112,15 @@ impl LlmClient {
     }
 
     /// Send a chat completion request (non-streaming).
-    pub async fn chat(&self, options: ChatOptions) -> Result<ChatResult, FusionError> {
+    pub async fn chat(&self, mut options: ChatOptions) -> Result<ChatResult, FusionError> {
+        if options.max_tokens.is_none() {
+            if let Some(info) = fusion_core::models::lookup_model(&self.config.model) {
+                options.max_tokens = info.max_tokens_for(fusion_core::models::TokenLevel::Normal);
+            } else {
+                options.max_tokens = Some(4096);
+            }
+        }
+
         if self.config.provider == Provider::Cloudflare
             || is_cloudflare_model(&self.config.model)
         {
