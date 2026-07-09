@@ -57,55 +57,94 @@ impl CloudflareClient {
             body["tools"] = serde_json::json!(tools);
         }
 
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| FusionError::Llm(format!("HTTP error: {}", e)))?;
+        // Retry loop with exponential backoff for rate limits
+        let max_retries = 3u32;
+        let last_err = String::new();
 
-        if !resp.status().is_success() {
+        for attempt in 0..=max_retries {
+            let resp = self
+                .http
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| FusionError::Llm(format!("HTTP error: {}", e)))?;
+
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(FusionError::Llm(format!(
-                "Cloudflare AI error ({}): {}",
-                status, text
-            )));
+
+            if status.as_u16() == 429 {
+                // Rate limited — retry with backoff
+                let delay = 2u64.pow(attempt + 1); // 2s, 4s, 8s, 16s
+                if attempt < max_retries {
+                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    continue;
+                } else {
+                    return Err(FusionError::Llm(
+                        "Rate limited by Cloudflare (429). Tried 3 retries. \
+                         Wait a moment and try again, or switch models with /model."
+                            .into(),
+                    ));
+                }
+            }
+
+            if !status.is_success() {
+                let text = resp.text().await.unwrap_or_default();
+                // Extract a clean error message from the JSON if possible
+                let clean_msg = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| {
+                        v["errors"][0]["message"]
+                            .as_str()
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        if text.len() > 200 {
+                            format!("{}...", &text[..200])
+                        } else {
+                            text
+                        }
+                    });
+                return Err(FusionError::Llm(format!(
+                    "Cloudflare API error ({}): {}",
+                    status.as_u16(), clean_msg
+                )));
+            }
+
+            // Success — parse the response
+            let data: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| FusionError::Llm(format!("JSON parse error: {}", e)))?;
+
+            let content = data
+                .pointer("/result/choices/0/message/content")
+                .and_then(|v| v.as_str())
+                .or_else(|| data.pointer("/result/response").and_then(|v| v.as_str()))
+                .or_else(|| data.pointer("/result/text").and_then(|v| v.as_str()))
+                .or_else(|| data["result"].as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let reasoning_content = data
+                .pointer("/result/choices/0/message/reasoning_content")
+                .or_else(|| data.pointer("/result/choices/0/message/reasoning"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let tool_calls = parse_tool_calls(
+                data.pointer("/result/choices/0/message/tool_calls"),
+            );
+
+            return Ok(ChatResult {
+                content,
+                reasoning_content,
+                tool_calls,
+            });
         }
 
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| FusionError::Llm(format!("JSON parse error: {}", e)))?;
-
-        // Workers AI returns varied shapes — handle them all
-        let content = data
-            .pointer("/result/choices/0/message/content")
-            .and_then(|v| v.as_str())
-            .or_else(|| data.pointer("/result/response").and_then(|v| v.as_str()))
-            .or_else(|| data.pointer("/result/text").and_then(|v| v.as_str()))
-            .or_else(|| data["result"].as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let reasoning_content = data
-            .pointer("/result/choices/0/message/reasoning_content")
-            .or_else(|| data.pointer("/result/choices/0/message/reasoning"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let tool_calls = parse_tool_calls(
-            data.pointer("/result/choices/0/message/tool_calls"),
-        );
-
-        Ok(ChatResult {
-            content,
-            reasoning_content,
-            tool_calls,
-        })
+        Err(FusionError::Llm(last_err))
     }
 }
 
