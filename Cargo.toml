@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fusion-core",
+    "crates/fusion-llm",
+    "crates/fusion-agent",
+    "crates/fusion-tui",
+    "crates/fusion-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Aung Myat Moe"]
+repository = "https://github.com/aungmyatmoe/zencode"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+thiserror = "2"
+anyhow = "1"

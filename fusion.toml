@@ -1,0 +1,36 @@
+# Fusion — mobile-first AI coding agent
+# Config file (Codex-style TOML, primary format)
+#
+# Place this at:
+#   ./fusion.toml           (project-level, highest priority)
+#   ~/.config/fusion/fusion.toml  (global)
+#   ~/.fusion/fusion.toml   (global fallback)
+#
+# Environment variables always override file config.
+# Also supports zencode.json (JSON) for backward compatibility.
+
+# Model to use (default: Kimi 2.7 Code via Cloudflare Workers AI)
+model = "@cf/moonshotai/kimi-k2.7-code"
+# small_model = "@cf/moonshotai/kimi-k2.7-code"
+
+# Auto-approve all tool actions (use carefully!)
+yolo = false
+
+[provider]
+# Which provider to use by default: "cloudflare", "xai", "openai", "auto"
+default = "cloudflare"
+
+[provider.cloudflare]
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+api_key = "YOUR_CLOUDFLARE_API_TOKEN"
+
+# [provider.xai]
+# api_key = "xai-YOUR_KEY"
+# base_url = "https://api.x.ai/v1"
+
+# [provider.openai]
+# api_key = "sk-YOUR_KEY"
+# base_url = "https://api.openai.com/v1"
+
+[settings]
+# theme = "system"

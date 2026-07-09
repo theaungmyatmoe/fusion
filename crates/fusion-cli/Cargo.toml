@@ -1,0 +1,19 @@
+[package]
+name = "fusion-cli"
+description = "Binary entry point for Fusion — mobile-first AI coding agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fusion"
+path = "src/main.rs"
+
+[dependencies]
+fusion-core = { path = "../fusion-core" }
+fusion-tui = { path = "../fusion-tui" }
+fusion-agent = { path = "../fusion-agent" }
+fusion-llm = { path = "../fusion-llm" }
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }

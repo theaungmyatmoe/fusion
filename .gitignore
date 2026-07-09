@@ -1,58 +1,21 @@
-# Binaries
-/zencode
-/zencode.exe
-/bin/
-/dist/
+# Rust
+/target/
+**/*.rs.bk
 
-# Go
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-
-# Deps
-vendor/
-
-# IDE / editors
-.idea/
-.vscode/
-*.swp
-*~
+# Old JS/Go (archived)
+node_modules/
+dist/
+*.tsbuildinfo
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Local config & secrets (never commit keys)
-.zencode/
-config.toml
-*.env
-.env*
-secrets/
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# zencode config (contains real credentials like Cloudflare tokens)
-# Copy zencode.json.example -> zencode.json and edit
-zencode.json
-zencode.jsonc
-!zencode.json.example
-
-# Build artifacts
-*.log
-/tmp/
-tmp/
-
-# Termux / Android specific noise
-/storage/
-
-# Node / Bun / TS
-node_modules/
-dist/
-*.tsbuildinfo
-bun.lockb
-package-lock.json
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Config secrets (don't commit real keys)
+# zencode.json  # keep the example, gitignore user-specific ones if needed
