@@ -34,7 +34,7 @@ impl CloudflareClient {
             .with_api_base(&api_base);
 
         let http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(90))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -145,7 +145,7 @@ impl CloudflareClient {
             .map_err(|e| FusionError::Llm(format!("Request build error: {}", e)))?;
 
         // Execute request with retries
-        let max_retries = 3;
+        let max_retries = 1;
         let mut last_err = String::new();
 
         for attempt in 0..=max_retries {

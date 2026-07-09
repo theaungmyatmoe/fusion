@@ -91,7 +91,7 @@ headers = {
 
 # Try Qwen with tools
 payload = {
-    "model": "@cf/qwen/qwen2.5-coder-32b-instruct",
+    "model": "@cf/moonshotai/kimi-k2.7-code",
     "messages": [
         {"role": "user", "content": "create a reactjs todo list project"}
     ],

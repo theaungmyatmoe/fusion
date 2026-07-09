@@ -26,7 +26,7 @@ impl OpenAiCompatClient {
             .with_api_base(&config.base_url);
 
         let http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(90))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 

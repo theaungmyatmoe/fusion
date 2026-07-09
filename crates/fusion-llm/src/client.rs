@@ -165,3 +165,37 @@ impl LlmClient {
 pub fn create_llm_client(config: &Config) -> LlmClient {
     LlmClient::new(config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fusion_core::config::{Config, Provider};
+
+    #[tokio::test]
+    async fn test_kimi_live() {
+        let config = Config {
+            model: "@cf/moonshotai/kimi-k2.7-code".to_string(),
+            small_model: None,
+            yolo: false,
+            provider: Provider::Cloudflare,
+            cloudflare_account_id: std::env::var("CLOUDFLARE_ACCOUNT_ID").ok(),
+            api_key: std::env::var("CLOUDFLARE_API_TOKEN").unwrap_or_default(),
+            base_url: String::new(),
+            config_path: None,
+            settings: std::collections::HashMap::new(),
+        };
+
+        let client = LlmClient::new(&config);
+        let options = ChatOptions {
+            messages: vec![ChatMessage::user("hi")],
+            tools: None,
+            temperature: Some(0.4),
+            max_tokens: Some(100),
+        };
+
+        match client.chat(options).await {
+            Ok(res) => println!("Success: {:?}", res),
+            Err(e) => println!("Error: {:?}", e),
+        }
+    }
+}
