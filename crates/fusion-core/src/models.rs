@@ -85,6 +85,18 @@ pub static CLOUDFLARE_MODELS: &[ModelInfo] = &[
         category: "coding",
     },
     ModelInfo {
+        shorthand: "glm5",
+        full_id: "@cf/zai-org/glm-5.2",
+        display_name: "GLM 5.2 Coder",
+        context_window: 262144,
+        max_tokens_normal: Some(4096),
+        max_tokens_high: Some(16384),
+        max_tokens_max: Some(32768),
+        supports_tools: true,
+        supports_reasoning: true,
+        category: "coding",
+    },
+    ModelInfo {
         shorthand: "qwen3",
         full_id: "@cf/qwen/qwen3-30b-a3b-fp8",
         display_name: "Qwen3 30B-A3B",

@@ -15,6 +15,8 @@ pub struct ChatMessage {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 impl ChatMessage {
@@ -24,6 +26,7 @@ impl ChatMessage {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: None,
         }
     }
 
@@ -33,6 +36,7 @@ impl ChatMessage {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: None,
         }
     }
 
@@ -42,6 +46,17 @@ impl ChatMessage {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(tool_calls),
         }
     }
 
@@ -51,6 +66,7 @@ impl ChatMessage {
             content: content.into(),
             name: None,
             tool_call_id: Some(tool_call_id.into()),
+            tool_calls: None,
         }
     }
 }

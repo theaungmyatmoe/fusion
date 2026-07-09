@@ -99,9 +99,9 @@ impl Agent {
 
             // Handle tool calls
             if !result.tool_calls.is_empty() {
-                // Add assistant message with content (even if empty)
+                // Add assistant message with tool calls populated
                 self.messages
-                    .push(ChatMessage::assistant(&result.content));
+                    .push(ChatMessage::assistant_with_tools(result.content.clone(), result.tool_calls.clone()));
 
                 for tc in &result.tool_calls {
                     let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
@@ -143,6 +143,7 @@ impl Agent {
                         content: format!("Tool {} result:\n{}", tc.name, output),
                         name: Some(tc.name.clone()),
                         tool_call_id: Some(tc.id.clone()),
+                        tool_calls: None,
                     });
                 }
                 continue; // next round

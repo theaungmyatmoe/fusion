@@ -1,9 +1,11 @@
 use async_openai::{
     config::OpenAIConfig,
     types::{
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-        ChatCompletionRequestUserMessage, ChatCompletionRequestAssistantMessage,
-        CreateChatCompletionRequestArgs,
+        ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
+        ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
+        ChatCompletionRequestSystemMessage, ChatCompletionRequestToolMessage,
+        ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
+        ChatCompletionToolType, CreateChatCompletionRequestArgs, FunctionCall,
     },
     Client,
 };
@@ -80,9 +82,36 @@ impl CloudflareClient {
                         ..Default::default()
                     })
                 }
-                "assistant" => ChatCompletionRequestMessage::Assistant(
-                    ChatCompletionRequestAssistantMessage {
-                        content: Some(m.content.clone().into()),
+                "assistant" => {
+                    let tool_calls = m.tool_calls.as_ref().map(|tcs| {
+                        tcs.iter()
+                            .map(|tc| ChatCompletionMessageToolCall {
+                                id: tc.id.clone(),
+                                r#type: ChatCompletionToolType::Function,
+                                function: FunctionCall {
+                                    name: tc.name.clone(),
+                                    arguments: tc.arguments.to_string(),
+                                },
+                            })
+                            .collect()
+                    });
+                    ChatCompletionRequestMessage::Assistant(
+                        ChatCompletionRequestAssistantMessage {
+                            content: if m.content.is_empty() {
+                                None
+                            } else {
+                                Some(ChatCompletionRequestAssistantMessageContent::Text(m.content.clone()))
+                            },
+                            tool_calls,
+                            name: m.name.clone(),
+                            ..Default::default()
+                        },
+                    )
+                }
+                "tool" => ChatCompletionRequestMessage::Tool(
+                    ChatCompletionRequestToolMessage {
+                        content: ChatCompletionRequestToolMessageContent::Text(m.content.clone()),
+                        tool_call_id: m.tool_call_id.clone().unwrap_or_default(),
                         ..Default::default()
                     },
                 ),
