@@ -19,3 +19,7 @@ Thumbs.db
 
 # Config secrets (don't commit real keys)
 # zencode.json  # keep the example, gitignore user-specific ones if needed
+
+# Local Reference Clones
+/reference/
+
