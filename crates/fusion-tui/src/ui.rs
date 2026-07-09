@@ -8,16 +8,17 @@ use ratatui::{
 
 use crate::app::{App, AppMode, AutocompleteMode};
 
-// ── Clean gray palette ───────────────────────────────────────────────────────
+// ── Clean gray palette (Grok CLI Dark Theme) ───────────────────────────────
 
-const LABEL_COLOR: Color = Color::Reset;
-const DIM: Color = Color::DarkGray;
-const BORDER: Color = Color::Gray;
-const SELECTED_BG: Color = Color::DarkGray;
+const LABEL_COLOR: Color = Color::Rgb(224, 224, 224); // #e0e0e0
+const DIM: Color = Color::Rgb(102, 102, 102);         // #666666
+const BORDER: Color = Color::Rgb(51, 51, 51);         // #333333
+const SELECTED_BG: Color = Color::Rgb(42, 42, 42);     // #2a2a2a
 const SELECTED_FG: Color = Color::White;
-const POPUP_BORDER: Color = Color::Gray;
-const USER_BG: Color = Color::Rgb(235, 235, 235);
-const USER_FG: Color = Color::Rgb(30, 30, 30);
+const POPUP_BORDER: Color = Color::Rgb(85, 85, 85);    // #555555
+const USER_BG: Color = Color::Rgb(26, 26, 26);         // #1a1a1a (backgroundElement)
+const USER_FG: Color = Color::Rgb(224, 224, 224);     // #e0e0e0
+const AUTOCOMPLETE_BG: Color = Color::Rgb(17, 17, 17); // #111111 (backgroundPanel)
 
 /// Render the full TUI frame.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -263,7 +264,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
         let (fg, bg) = if is_selected {
             (SELECTED_FG, SELECTED_BG)
         } else {
-            (LABEL_COLOR, Color::Reset)
+            (LABEL_COLOR, AUTOCOMPLETE_BG)
         };
 
         let current_tag = if item.is_current { " (current)" } else { "" };
@@ -289,6 +290,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(POPUP_BORDER))
+            .style(Style::default().bg(AUTOCOMPLETE_BG))
             .title_bottom(Span::styled(count_str, Style::default().fg(DIM))),
     );
 
@@ -361,11 +363,12 @@ fn short_cwd() -> String {
 
 // ── Markdown Renderer ────────────────────────────────────────────────────────
 
-const CODE_FG: Color = Color::Rgb(220, 120, 50);   // orange for inline code
-const CODE_BG: Color = Color::Rgb(40, 40, 40);     // dark bg for code blocks
-const CODE_BLOCK_FG: Color = Color::Rgb(180, 180, 180);
-const HEADER_COLOR: Color = Color::Rgb(80, 80, 200);
-const BOLD_COLOR: Color = Color::Reset;
+const CODE_FG: Color = Color::Rgb(106, 191, 106);   // #6abf6a (grok green)
+const CODE_BG: Color = Color::Rgb(20, 20, 20);     // #141414 (grok dark bg)
+const CODE_BLOCK_FG: Color = Color::Rgb(192, 192, 192); // #c0c0c0
+const HEADER_COLOR: Color = Color::Rgb(92, 156, 245); // #5c9cf5 (grok blue)
+const BOLD_COLOR: Color = Color::Rgb(232, 164, 101);   // #e8a465 (grok orange/brown)
+const ITALIC_COLOR: Color = Color::Rgb(229, 192, 123); // #e5c07b (grok yellow)
 const BULLET_COLOR: Color = Color::DarkGray;
 const INDENT: &str = "  ";
 
@@ -508,7 +511,7 @@ fn flush_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[St
 /// Parse inline markdown (bold, italic, inline code) into styled Spans.
 fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut chars: Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let mut pos = 0;
     let mut buf = String::new();
 
@@ -578,7 +581,7 @@ fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
             spans.push(Span::styled(
                 italic_text,
                 Style::default()
-                    .fg(LABEL_COLOR)
+                    .fg(ITALIC_COLOR)
                     .add_modifier(Modifier::ITALIC),
             ));
             continue;

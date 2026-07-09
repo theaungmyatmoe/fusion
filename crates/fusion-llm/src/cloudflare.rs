@@ -75,10 +75,18 @@ impl CloudflareClient {
             let status = resp.status();
 
             if status.as_u16() == 429 {
-                // Rate limited — retry with backoff
-                let delay = 2u64.pow(attempt + 1); // 2s, 4s, 8s, 16s
+                // Rate limited — check retry-after header if present, fallback to exponential backoff
+                let mut delay_secs = 2u64.pow(attempt + 1); // 2s, 4s, 8s, 16s
+                if let Some(header_val) = resp.headers().get("retry-after") {
+                    if let Ok(val_str) = header_val.to_str() {
+                        if let Ok(parsed_secs) = val_str.parse::<u64>() {
+                            delay_secs = parsed_secs;
+                        }
+                    }
+                }
+
                 if attempt < max_retries {
-                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
                     continue;
                 } else {
                     return Err(FusionError::Llm(
