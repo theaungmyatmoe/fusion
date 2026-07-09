@@ -625,6 +625,14 @@ impl App {
                 self.turn_start = None;
                 self.session.push_message("assistant", &text);
                 self.save_session();
+
+                // Trigger desktop notification
+                let summary = if text.starts_with("Error:") {
+                    "Session error encountered."
+                } else {
+                    "Session completed successfully."
+                };
+                trigger_desktop_notification("Fusion Coder", summary);
             }
             AgentEvent::TodoUpdate(todos) => {
                 let list: String = todos
@@ -956,4 +964,30 @@ pub async fn run_tui_with_session(
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn trigger_desktop_notification(title: &str, message: &str) {
+    let script = format!(
+        "display notification \"{}\" with title \"{}\" sound name \"Glass\"",
+        message.replace('\"', "\\\""),
+        title.replace('\"', "\\\"")
+    );
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .spawn();
+}
+
+#[cfg(target_os = "linux")]
+fn trigger_desktop_notification(title: &str, message: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .arg(title)
+        .arg(message)
+        .spawn();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn trigger_desktop_notification(_title: &str, _message: &str) {
+    // No-op fallback
 }
