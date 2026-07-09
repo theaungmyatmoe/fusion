@@ -14,8 +14,12 @@ pub struct CloudflareClient {
 
 impl CloudflareClient {
     pub fn new(config: &Config) -> Self {
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            http: Client::new(),
+            http,
             account_id: config.cloudflare_account_id.clone().unwrap_or_default(),
             api_key: config.api_key.clone(),
             model: config.model.clone(),
@@ -57,20 +61,37 @@ impl CloudflareClient {
             body["tools"] = serde_json::json!(tools);
         }
 
-        // Retry loop with exponential backoff for rate limits
+        // Retry loop with exponential backoff for rate limits and transient connection errors
         let max_retries = 3u32;
-        let last_err = String::new();
+        let mut last_err = String::new();
 
         for attempt in 0..=max_retries {
-            let resp = self
+            let resp_res = self
                 .http
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
-                .await
-                .map_err(|e| FusionError::Llm(format!("HTTP error: {}", e)))?;
+                .await;
+
+            let resp = match resp_res {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = format!("HTTP error: {}", e);
+                    if attempt < max_retries {
+                        let delay_secs = 2u64.pow(attempt + 1);
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                        continue;
+                    } else {
+                        return Err(FusionError::Llm(format!(
+                            "Connection failed after {} attempts. Error: {}",
+                            max_retries + 1,
+                            last_err
+                        )));
+                    }
+                }
+            };
 
             let status = resp.status();
 
