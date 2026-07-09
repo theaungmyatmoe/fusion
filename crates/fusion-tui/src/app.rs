@@ -517,19 +517,22 @@ impl App {
 
         tokio::spawn(async move {
             let mut agent = agent.lock().await;
-            match agent.process(&text).await {
-                Ok(events) => {
-                    for event in events {
-                        let _ = tx.send(AppEvent::Agent(event));
-                    }
+            let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
+            
+            let tx_clone = tx.clone();
+            let forwarder = tokio::spawn(async move {
+                while let Some(event) = agent_rx.recv().await {
+                    let _ = tx_clone.send(AppEvent::Agent(event));
                 }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Agent(AgentEvent::FinalResponse(format!(
-                        "Error: {}",
-                        e
-                    ))));
-                }
+            });
+
+            if let Err(e) = agent.process(&text, agent_tx).await {
+                let _ = tx.send(AppEvent::Agent(AgentEvent::FinalResponse(format!(
+                    "Error: {}",
+                    e
+                ))));
             }
+            let _ = forwarder.await;
         });
     }
 
@@ -543,20 +546,27 @@ impl App {
                     }
                 }
 
-                let preview = if text.len() > 80 {
-                    format!("{}…", &text[..80])
-                } else {
-                    text
-                };
                 if let Some(last) = self.messages.last_mut() {
                     if last.role == "thinking" {
-                        last.content = preview;
+                        last.content.push_str(&text);
                         return;
                     }
                 }
                 self.messages.push(Message {
                     role: "thinking".to_string(),
-                    content: preview,
+                    content: text,
+                });
+            }
+            AgentEvent::TextDelta(text) => {
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == "assistant" {
+                        last.content.push_str(&text);
+                        return;
+                    }
+                }
+                self.messages.push(Message {
+                    role: "assistant".to_string(),
+                    content: text,
                 });
             }
             AgentEvent::ToolCall { name, args_preview } => {
@@ -611,10 +621,19 @@ impl App {
                     content: format!("{:.1}s", thought_duration),
                 });
 
-                self.messages.push(Message {
-                    role: "assistant".to_string(),
-                    content: text.clone(),
-                });
+                let mut updated = false;
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == "assistant" {
+                        last.content = text.clone();
+                        updated = true;
+                    }
+                }
+                if !updated {
+                    self.messages.push(Message {
+                        role: "assistant".to_string(),
+                        content: text.clone(),
+                    });
+                }
 
                 // Show "Turn completed in Xs"
                 self.messages.push(Message {

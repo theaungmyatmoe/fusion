@@ -111,46 +111,82 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
         // User message
         println!("\x1b[38;2;59;130;246;1mYou:\x1b[0m {}", trimmed);
 
-        match agent.process(trimmed).await {
-            Ok(events) => {
-                for event in events {
-                    match event {
-                        AgentEvent::Thinking(text) => {
-                            println!("\x1b[38;2;139;92;246m🤔 Thinking:\x1b[0m \x1b[90m{}\x1b[0m", text);
+        let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
+        let printer = tokio::spawn(async move {
+            use std::io::Write;
+            let mut is_first_thinking = true;
+            let mut is_first_text = true;
+
+            while let Some(event) = agent_rx.recv().await {
+                match event {
+                    AgentEvent::Thinking(text) => {
+                        if is_first_thinking {
+                            print!("\x1b[38;2;139;92;246m🤔 Thinking:\x1b[0m \x1b[90m");
+                            is_first_thinking = false;
                         }
-                        AgentEvent::ToolCall { name, args_preview } => {
-                            println!("\x1b[36m[tool] {}\x1b[0m {}", name, &args_preview[..args_preview.len().min(200)]);
+                        print!("{}", text);
+                        let _ = std::io::stdout().flush();
+                    }
+                    AgentEvent::TextDelta(text) => {
+                        if !is_first_thinking {
+                            // Close thinking tag
+                            print!("\x1b[0m\n");
+                            is_first_thinking = true;
                         }
-                        AgentEvent::ToolResult { name: _, output } => {
-                            let truncated = if output.len() > 500 {
-                                format!("{}...", &output[..500])
-                            } else {
-                                output
-                            };
-                            println!("\x1b[90m  → {}\x1b[0m", truncated);
+                        if is_first_text {
+                            print!("\x1b[32mAgent:\x1b[0m ");
+                            is_first_text = false;
                         }
-                        AgentEvent::FinalResponse(text) => {
+                        print!("{}", text);
+                        let _ = std::io::stdout().flush();
+                    }
+                    AgentEvent::ToolCall { name, args_preview } => {
+                        if !is_first_thinking {
+                            print!("\x1b[0m\n");
+                            is_first_thinking = true;
+                        }
+                        is_first_text = true;
+                        println!("\x1b[36m[tool] {}\x1b[0m {}", name, &args_preview[..args_preview.len().min(200)]);
+                    }
+                    AgentEvent::ToolResult { name: _, output } => {
+                        let truncated = if output.len() > 500 {
+                            format!("{}...", &output[..500])
+                        } else {
+                            output
+                        };
+                        println!("\x1b[90m  → {}\x1b[0m", truncated);
+                    }
+                    AgentEvent::FinalResponse(text) => {
+                        if !is_first_thinking {
+                            print!("\x1b[0m\n");
+                        }
+                        if is_first_text {
                             println!("\x1b[32mAgent:\x1b[0m {}", text);
+                        } else {
+                            println!();
                         }
-                        AgentEvent::TodoUpdate(todos) => {
-                            println!("\x1b[33mTodos:\x1b[0m");
-                            for t in &todos {
-                                let icon = match t.status.as_str() {
-                                    "done" => "✓",
-                                    "in_progress" => "→",
-                                    _ => "○",
-                                };
-                                println!("  {} {}", icon, t.content);
-                            }
+                    }
+                    AgentEvent::TodoUpdate(todos) => {
+                        println!("\x1b[33mTodos:\x1b[0m");
+                        for t in &todos {
+                            let icon = match t.status.as_str() {
+                                "done" => "✓",
+                                "in_progress" => "→",
+                                _ => "○",
+                            };
+                            println!("  {} {}", icon, t.content);
                         }
                     }
                 }
             }
-            Err(e) => {
-                let msg = format!("{}", e);
-                println!("\x1b[31mAgent error:\x1b[0m {}", msg.lines().next().unwrap_or(&msg));
-            }
+        });
+
+        if let Err(e) = agent.process(trimmed, agent_tx).await {
+            let msg = format!("{}", e);
+            println!("\n\x1b[31mAgent error:\x1b[0m {}", msg.lines().next().unwrap_or(&msg));
         }
+
+        let _ = printer.await;
     }
 
     Ok(())

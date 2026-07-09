@@ -1,6 +1,6 @@
 use fusion_core::config::Config;
 use fusion_core::error::FusionError;
-use fusion_llm::client::{ChatMessage, ChatOptions, ChatResult, create_llm_client, LlmClient};
+use fusion_llm::client::{ChatMessage, ChatOptions, create_llm_client, LlmClient};
 
 use crate::tools::{ToolRegistry, build_tool_schemas};
 
@@ -8,6 +8,7 @@ use crate::tools::{ToolRegistry, build_tool_schemas};
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Thinking(String),
+    TextDelta(String),
     ToolCall { name: String, args_preview: String },
     ToolResult { name: String, output: String },
     FinalResponse(String),
@@ -46,10 +47,11 @@ impl Agent {
     }
 
     /// Process a user message through the agent loop.
-    /// Returns a list of events and the final response.
-    pub async fn process(&mut self, user_message: &str) -> Result<Vec<AgentEvent>, FusionError> {
-        let mut events = Vec::new();
-
+    pub async fn process(
+        &mut self,
+        user_message: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<(), FusionError> {
         // Initialize system prompt on first message
         if self.messages.is_empty() {
             self.messages.push(ChatMessage::system(
@@ -90,12 +92,31 @@ impl Agent {
                 max_tokens: None,
             };
 
-            let result: ChatResult = self.llm.chat(options).await?;
+            let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel();
+            let tx_clone = tx.clone();
+            
+            // Spawn background task to forward streaming events to TUI in real-time
+            let forwarder = tokio::spawn(async move {
+                while let Some(llm_event) = llm_rx.recv().await {
+                    match llm_event {
+                        fusion_llm::client::LlmEvent::Thinking(chunk) => {
+                            let _ = tx_clone.send(AgentEvent::Thinking(chunk));
+                        }
+                        fusion_llm::client::LlmEvent::TextDelta(chunk) => {
+                            let _ = tx_clone.send(AgentEvent::TextDelta(chunk));
+                        }
+                    }
+                }
+            });
 
-            // Emit thinking if present
-            if let Some(ref reasoning) = result.reasoning_content {
-                events.push(AgentEvent::Thinking(reasoning.clone()));
-            }
+            let result = match self.llm.chat(options, Some(llm_tx)).await {
+                Ok(res) => res,
+                Err(e) => {
+                    let _ = forwarder.await;
+                    return Err(e);
+                }
+            };
+            let _ = forwarder.await;
 
             // Handle tool calls
             if !result.tool_calls.is_empty() {
@@ -111,7 +132,7 @@ impl Agent {
                         args_str.clone()
                     };
 
-                    events.push(AgentEvent::ToolCall {
+                    let _ = tx.send(AgentEvent::ToolCall {
                         name: tc.name.clone(),
                         args_preview: preview,
                     });
@@ -123,7 +144,7 @@ impl Agent {
                         .await
                         .unwrap_or_else(|e| format!("Tool execution error: {}", e));
 
-                    events.push(AgentEvent::ToolResult {
+                    let _ = tx.send(AgentEvent::ToolResult {
                         name: tc.name.clone(),
                         output: output.clone(),
                     });
@@ -134,7 +155,7 @@ impl Agent {
                             serde_json::from_value::<Vec<TodoItem>>(tc.arguments["todos"].clone())
                         {
                             self.todos = items.clone();
-                            events.push(AgentEvent::TodoUpdate(items));
+                            let _ = tx.send(AgentEvent::TodoUpdate(items));
                         }
                     }
 
@@ -157,13 +178,13 @@ impl Agent {
             };
 
             self.messages.push(ChatMessage::assistant(&final_text));
-            events.push(AgentEvent::FinalResponse(final_text));
-            return Ok(events);
+            let _ = tx.send(AgentEvent::FinalResponse(final_text));
+            return Ok(());
         }
 
         let msg = "Agent reached max rounds without final answer.".to_string();
-        events.push(AgentEvent::FinalResponse(msg));
-        Ok(events)
+        let _ = tx.send(AgentEvent::FinalResponse(msg));
+        Ok(())
     }
 
     pub fn get_todos(&self) -> &[TodoItem] {

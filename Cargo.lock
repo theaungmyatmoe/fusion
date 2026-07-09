@@ -498,6 +498,7 @@ dependencies = [
  "fusion-core",
  "futures",
  "reqwest",
+ "reqwest-eventsource",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

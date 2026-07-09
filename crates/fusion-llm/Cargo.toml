@@ -16,3 +16,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 async-openai = { version = "0.27", default-features = false, features = ["rustls"] }
 tokio-stream = "0.1"
 futures = "0.3"
+reqwest-eventsource = "0.6"

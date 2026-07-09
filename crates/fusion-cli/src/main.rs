@@ -178,25 +178,26 @@ async fn main() -> anyhow::Result<()> {
     if let Some(prompt_text) = prompt {
         let cwd = current_dir.to_string_lossy().to_string();
         let mut agent = fusion_agent::agent::Agent::new(&config, cwd);
-        match agent.process(&prompt_text).await {
-            Ok(events) => {
-                for event in events {
-                    match event {
-                        fusion_agent::agent::AgentEvent::FinalResponse(text) => {
-                            println!("{}", text);
-                        }
-                        fusion_agent::agent::AgentEvent::ToolCall { name, args_preview } => {
-                            eprintln!("[tool] {} {}", name, &args_preview[..args_preview.len().min(200)]);
-                        }
-                        _ => {}
+        let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
+        let forwarder = tokio::spawn(async move {
+            while let Some(event) = agent_rx.recv().await {
+                match event {
+                    fusion_agent::agent::AgentEvent::FinalResponse(text) => {
+                        println!("{}", text);
                     }
+                    fusion_agent::agent::AgentEvent::ToolCall { name, args_preview } => {
+                        eprintln!("[tool] {} {}", name, &args_preview[..args_preview.len().min(200)]);
+                    }
+                    _ => {}
                 }
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+        });
+
+        if let Err(e) = agent.process(&prompt_text, agent_tx).await {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
+        let _ = forwarder.await;
         return Ok(());
     }
 
