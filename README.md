@@ -89,6 +89,15 @@ fusion --upgrade          # Self-upgrade Fusion to the latest version
 * `/status` — View current settings
 * `/exit` — Quit
 
+### TUI Keymaps
+* **`Tab`** — Toggle silently between **Normal** (`Enter:send`) and **Plan** (`Enter:plan`) modes.
+* **`Shift+Tab`** — Cycle through all TUI modes (**Normal** -> **Plan** -> **YOLO**).
+* **`Cmd+V`** / **`Ctrl+V`** — Paste text from the clipboard.
+* **`Ctrl+V`** / **`Ctrl+G`** — Save and attach clipboard images instantly (saved as `.png` files and rendered chronologically in-line as `[Image #N]` tags).
+* **`Ctrl+E`** — Open your system editor (e.g. VS Code, Vim, Nano based on `$EDITOR` env) to compose or edit your current input line in a full screen editor.
+* **`Up`** / **`Down`** — Cycle through your previous input command history.
+* **`Backspace`** — Atomically deletes in-line tag placeholders (like `[Image #1]`) and cleans them up from the attachment list.
+
 ## Architecture
 
 * `crates/fusion-core` — Shared types, configs, and search-replace safety validation.
