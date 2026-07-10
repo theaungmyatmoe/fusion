@@ -119,6 +119,11 @@ impl LlmClient {
         &self.config.model
     }
 
+    /// Update the target model dynamically.
+    pub fn update_model(&mut self, model: &str) {
+        self.config.model = model.to_string();
+    }
+
     /// Send a chat completion request. If event_tx is provided, it streams chunks in real-time.
     pub async fn chat(
         &self,

@@ -603,7 +603,10 @@ impl App {
     fn update_autocomplete(&mut self) {
         match self.autocomplete_mode {
             AutocompleteMode::Commands => {
-                if self.input.starts_with('/') && !self.input.contains(' ') {
+                if self.input.starts_with("/model ") {
+                    self.autocomplete_mode = AutocompleteMode::Models;
+                    self.show_model_picker();
+                } else if self.input.starts_with('/') && !self.input.contains(' ') {
                     let prefix = self.input.to_lowercase();
                     self.autocomplete_items = SLASH_COMMANDS
                         .iter()
@@ -1019,7 +1022,9 @@ impl App {
             }
             "/model" => {
                 if let Some(name) = parts.get(1) {
+                    let mut resolved_model = name.to_string();
                     if let Some(info) = lookup_model(name) {
+                        resolved_model = info.full_id.to_string();
                         self.model = info.full_id.to_string();
                         self.messages.push(Message {
                             role: "system".to_string(),
@@ -1035,6 +1040,16 @@ impl App {
                             content: format!("Model → {}", name),
                         });
                     }
+
+                    self.session.model = resolved_model.clone();
+                    self.save_session();
+
+                    // Update active agent model mid-session!
+                    let agent = Arc::clone(&self.agent);
+                    tokio::spawn(async move {
+                        let mut agent = agent.lock().await;
+                        agent.update_model(&resolved_model);
+                    });
                 } else {
                     self.messages.push(Message {
                         role: "system".to_string(),

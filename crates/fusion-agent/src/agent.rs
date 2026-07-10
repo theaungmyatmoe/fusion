@@ -71,11 +71,14 @@ impl Agent {
                  4. Keep edits minimal, safe, and focused.\n\
                  5. Run tests or compilation steps via shell to verify correctness.\n\
                  6. Use todo tools to track your progress visibly.\n\n\
+                 RUNNING SHELL COMMANDS:\n\
+                 - Always run installation and scaffolding commands in NON-INTERACTIVE mode (using -y, --yes, or --non-interactive).\n\
+                 - For example, instead of 'npm create vite@latest', run 'npm create vite@latest -y -- --template react'.\n\
+                 - If a command waits for stdin/user input, it will HANG and TIMEOUT (e.g. after 120 seconds). Make sure there are no prompts.\n\n\
                  IMPORTANT: When you have gathered enough information and made the needed changes, \n\
                  you MUST provide a final text response summarizing your work. \n\
                  Do not keep calling tools indefinitely — be efficient and wrap up."
             );
-
             // Load any specialized local or global skills
             let skills = fusion_core::config::load_skills(&self.cwd);
             if !skills.is_empty() {
@@ -286,5 +289,9 @@ impl Agent {
 
     pub fn get_history(&self) -> &[ChatMessage] {
         &self.messages
+    }
+
+    pub fn update_model(&mut self, model: &str) {
+        self.llm.update_model(model);
     }
 }

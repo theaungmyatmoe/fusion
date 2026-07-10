@@ -270,11 +270,60 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
                         if parts.len() == 2 {
                             let name = parts[0];
                             let args = parts[1];
-                            let display_cmd = if name == "run_command" {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                                    v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args.to_string())
-                                } else {
-                                    args.to_string()
+                            let display_cmd = if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                                match name {
+                                    "run_command" => {
+                                        v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args.to_string())
+                                    }
+                                    "todo_write" => {
+                                        if let Some(arr) = v["todos"].as_array() {
+                                            let mut items = Vec::new();
+                                            for item in arr {
+                                                let content = item["content"].as_str().unwrap_or("");
+                                                let status = item["status"].as_str().unwrap_or("");
+                                                let icon = match status {
+                                                    "done" => "✓",
+                                                    "in_progress" => "→",
+                                                    _ => "○",
+                                                };
+                                                items.push(format!("  {} {}", icon, content));
+                                            }
+                                            items.join("\n")
+                                        } else {
+                                            args.to_string()
+                                        }
+                                    }
+                                    "read_file" => {
+                                        v["path"].as_str().map(|s| format!("Path: {}", s)).unwrap_or_else(|| args.to_string())
+                                    }
+                                    "write_file" => {
+                                        let path = v["path"].as_str().unwrap_or("");
+                                        let content_len = v["content"].as_str().map(|s| s.len()).unwrap_or(0);
+                                        format!("Path: {}\nWriting {} bytes", path, content_len)
+                                    }
+                                    "search_replace" => {
+                                        let path = v["path"].as_str().unwrap_or("");
+                                        let old = v["old_string"].as_str().unwrap_or("");
+                                        let new = v["new_string"].as_str().unwrap_or("");
+                                        format!("Path: {}\nSearch:\n  {}\nReplace:\n  {}", path, old.replace('\n', "\n  "), new.replace('\n', "\n  "))
+                                    }
+                                    "grep" => {
+                                        let pattern = v["pattern"].as_str().unwrap_or("");
+                                        if let Some(glob) = v["glob"].as_str() {
+                                            format!("Pattern: \"{}\"  (glob: \"{}\")", pattern, glob)
+                                        } else {
+                                            format!("Pattern: \"{}\"", pattern)
+                                        }
+                                    }
+                                    "get_symbols" => {
+                                        let query = v["query"].as_str().unwrap_or("");
+                                        if let Some(kind) = v["kind"].as_str() {
+                                            format!("Query: \"{}\"  (kind: \"{}\")", query, kind)
+                                        } else {
+                                            format!("Query: \"{}\"", query)
+                                        }
+                                    }
+                                    _ => args.to_string()
                                 }
                             } else {
                                 args.to_string()
@@ -291,7 +340,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
                         let header_style = Style::default().fg(theme.bold_color).add_modifier(Modifier::BOLD);
                         
                         // Parse tools we want to style as code blocks
-                        let block_tools = ["read_file", "write_file", "search_replace", "grep", "get_symbols", "run_command"];
+                        let block_tools = ["read_file", "write_file", "search_replace", "grep", "get_symbols", "run_command", "todo_write"];
                         
                         if block_tools.contains(&name) {
                             let is_next_tool_result = msg_idx + 1 < app.messages.len() && app.messages[msg_idx + 1].role == "tool_result";
