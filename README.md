@@ -35,8 +35,6 @@ cd fusion
 cargo build --release
 ```
 
----
-
 ## Configuration
 
 Configure credentials and settings by creating a `fusion.toml` in your project directory or in `~/.config/fusion/fusion.toml`:
@@ -66,8 +64,6 @@ FUSION_MODEL             # Override model ID
 FUSION_YOLO=1            # Enable auto-approve mode
 ```
 
----
-
 ## Usage
 
 ```bash
@@ -86,8 +82,6 @@ fusion --yolo             # Auto-approve all shell executions
 * `/status` — View current settings
 * `/exit` — Quit
 
----
-
 ## Architecture
 
 * `crates/fusion-core` — Shared types, configs, and search-replace safety validation.
@@ -95,8 +89,6 @@ fusion --yolo             # Auto-approve all shell executions
 * `crates/fusion-agent` — Agent loops, state, and tool integrations (`read_file`, `write_file`, `search_replace`, `grep`, `get_symbols`, `run_command`).
 * `crates/fusion-tui` — Ratatui TUI and REPL views.
 * `crates/fusion-cli` — Argument parser and main entry point.
-
----
 
 ## License
 
