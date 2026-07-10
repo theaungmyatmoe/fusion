@@ -10,8 +10,14 @@ Installs the latest pre-compiled release binary directly to your path:
 curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
 ```
 
-### iOS (iSH Alpine Linux)
-To install dependencies (git, curl, ripgrep) and install Fusion in one command inside the iSH app:
+### iOS (UTM Virtual Machine — Recommended for TUI)
+To run the full Ratatui TUI on iOS, install a virtualized Ubuntu or Alpine Linux VM in **UTM** or **UTM SE** (App Store), and run the standard installer:
+```sh
+curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
+```
+
+### iOS (iSH Alpine Linux — Simple REPL Fallback)
+iSH has raw-mode terminal emulation limits that prevent the TUI from launching. Use this bootstrap command to set up dependencies and install the lightweight REPL fallback:
 ```sh
 curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/ish-bootstrap.sh | sh
 ```
