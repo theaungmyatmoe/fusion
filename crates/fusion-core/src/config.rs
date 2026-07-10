@@ -493,6 +493,11 @@ pub fn is_termux() -> bool {
     false
 }
 
+/// Detect if we're running inside the iSH iOS emulator.
+pub fn is_ish() -> bool {
+    std::path::Path::new("/proc/ish").exists()
+}
+
 fn expand_model_shorthand(model: &str) -> String {
     if let Some(rest) = model.strip_prefix("cloudflare/") {
         let expanded = if rest.contains('/') {
@@ -511,6 +516,65 @@ fn expand_model_shorthand(model: &str) -> String {
     } else {
         model.to_string()
     }
+}
+
+/// Load all available specialized skills from `.agents/skills/*/SKILL.md` (local)
+/// and `~/.config/fusion/skills/*/SKILL.md` (global).
+pub fn load_skills<P: AsRef<Path>>(cwd: P) -> Vec<(String, String)> {
+    let mut skills = Vec::new();
+
+    // 1. Local Workspace skills
+    let workspace_skills = cwd.as_ref().join(".agents").join("skills");
+    if workspace_skills.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(workspace_skills) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_file = path.join("SKILL.md");
+                    if skill_file.is_file() {
+                        if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                            let name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            skills.push((name, content));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Global user-level skills
+    if let Some(home) = dirs::home_dir() {
+        let global_skills = home.join(".config").join("fusion").join("skills");
+        if global_skills.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(global_skills) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let skill_file = path.join("SKILL.md");
+                        if skill_file.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                                let name = path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                // Avoid overriding local skills with global ones if names clash
+                                if !skills.iter().any(|(n, _)| n == &name) {
+                                    skills.push((name, content));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    skills
 }
 
 #[cfg(test)]

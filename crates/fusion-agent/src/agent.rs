@@ -54,7 +54,7 @@ impl Agent {
     ) -> Result<(), FusionError> {
         // Initialize system prompt on first message
         if self.messages.is_empty() {
-            self.messages.push(ChatMessage::system(
+            let mut sys_prompt = String::from(
                 "You are Fusion, a powerful, autonomous coding agent optimized for terminal environments.\n\n\
                  ENVIRONMENT:\n\
                  You are running inside a terminal (CLI). Your text output is rendered in a plain terminal — not a browser, not a rich text editor.\n\
@@ -74,7 +74,18 @@ impl Agent {
                  IMPORTANT: When you have gathered enough information and made the needed changes, \n\
                  you MUST provide a final text response summarizing your work. \n\
                  Do not keep calling tools indefinitely — be efficient and wrap up."
-            ));
+            );
+
+            // Load any specialized local or global skills
+            let skills = fusion_core::config::load_skills(&self.cwd);
+            if !skills.is_empty() {
+                sys_prompt.push_str("\n\nAVAILABLE SPECIALIZED SKILLS AND BEST PRACTICES:\n");
+                for (name, content) in skills {
+                    sys_prompt.push_str(&format!("--- SKILL: {} ---\n{}\n\n", name, content));
+                }
+            }
+
+            self.messages.push(ChatMessage::system(sys_prompt));
         }
 
         self.messages.push(ChatMessage::user(user_message));
