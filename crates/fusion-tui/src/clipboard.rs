@@ -1,4 +1,4 @@
-pub fn save_clipboard_image(cwd: &str) -> Result<std::path::PathBuf, String> {
+pub fn save_clipboard_image(_cwd: &str) -> Result<std::path::PathBuf, String> {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
@@ -9,7 +9,13 @@ pub fn save_clipboard_image(cwd: &str) -> Result<std::path::PathBuf, String> {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let filename = format!("image_{}.png", timestamp);
-        let target_path = std::path::Path::new(cwd).join(&filename);
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let cache_dir = std::path::Path::new(&home).join(".fusioncode");
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            return Err(format!("Failed to create cache directory: {}", e));
+        }
+        let target_path = cache_dir.join(&filename);
         let target_path_str = target_path.to_string_lossy();
 
         // Safe AppleScript command supporting both file URLs (class furl) and screenshots (class PNGf)
