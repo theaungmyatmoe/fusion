@@ -33,10 +33,10 @@ jobs:
           - target: aarch64-linux-android
             os: ubuntu-latest
             binary: fusion
-          # iOS/iSH Alpine (static musl 32-bit x86, cross-compiled)
-          - target: i686-unknown-linux-musl
-            os: ubuntu-latest
-            binary: fusion
+          # iOS/iSH Alpine (static musl 32-bit x86, cross-compiled) — commented out for now
+          # - target: i686-unknown-linux-musl
+          #   os: ubuntu-latest
+          #   binary: fusion
 
     runs-on: ${{ matrix.os }}
 

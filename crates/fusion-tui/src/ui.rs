@@ -101,7 +101,25 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     draw_status_bar(frame, app, chunks[0], theme);
     draw_messages(frame, app, chunks[1], area.width, theme);
-    // chunks[2] is just a spacer
+
+    // Quit-pending banner in the gap row above the input
+    if let Some(pending_at) = app.quit_pending {
+        if pending_at.elapsed().as_secs_f32() < 2.0 {
+            let banner = Paragraph::new(
+                Line::from(vec![
+                    Span::styled(
+                        " Press Ctrl+C again to quit ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Rgb(239, 68, 68))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])
+            );
+            frame.render_widget(banner, chunks[2]);
+        }
+    }
+
     draw_input(frame, app, chunks[3], theme);
     draw_hint(frame, app, chunks[4], theme);
 
@@ -259,6 +277,98 @@ fn draw_gradient_spinner(app: &App, theme: &Theme) -> Line<'static> {
 }
 
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, theme: Theme) {
+    if app.messages.is_empty() && app.input.is_empty() {
+        let card_width = 62;
+        let card_height = 12;
+
+        if area.width >= card_width && area.height >= card_height {
+            let start_x = area.x + (area.width - card_width) / 2;
+            let start_y = area.y + (area.height - card_height) / 2;
+            let card_area = Rect::new(start_x, start_y, card_width, card_height);
+
+            // Draw card block
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border))
+                .style(Style::default().bg(theme.user_bg));
+            frame.render_widget(block.clone(), card_area);
+
+            let inner = block.inner(card_area);
+
+            // Left side logo
+            let logo_lines = &[
+                "    .---.    ",
+                "   /     \\   ",
+                "  |   /\\  |  ",
+                "   \\  \\/ /   ",
+                "    '---'    ",
+            ];
+            for (i, line) in logo_lines.iter().enumerate() {
+                let logo_rect = Rect::new(inner.x + 1, inner.y + 2 + i as u16, 14, 1);
+                frame.render_widget(Paragraph::new(*line).style(Style::default().fg(theme.italic_color)), logo_rect);
+            }
+
+            // Right side details
+            let model_name = fusion_core::models::lookup_model(&app.model)
+                .map(|m| m.display_name.to_string())
+                .unwrap_or_else(|| app.model.clone());
+
+            let right_x = inner.x + 16;
+            let right_width = inner.width.saturating_sub(18);
+
+            // Title
+            let title_rect = Rect::new(right_x, inner.y + 1, right_width, 1);
+            let title_line = Line::from(vec![
+                Span::styled("Fusion Code Beta  ", Style::default().fg(theme.label_color).add_modifier(Modifier::BOLD)),
+                Span::styled("v0.1.8", Style::default().fg(theme.dim)),
+            ]);
+            frame.render_widget(Paragraph::new(title_line), title_rect);
+
+            // Announcement/Hint
+            let ann_rect1 = Rect::new(right_x, inner.y + 3, right_width, 1);
+            let ann_line1 = Line::from(vec![
+                Span::styled(format!("{} is active!", model_name), Style::default().fg(theme.header_color).add_modifier(Modifier::BOLD)),
+            ]);
+            frame.render_widget(Paragraph::new(ann_line1), ann_rect1);
+
+            let ann_rect2 = Rect::new(right_x, inner.y + 4, right_width, 1);
+            let ann_line2 = Line::from(vec![
+                Span::styled("Press Tab to toggle silent agent planning.", Style::default().fg(theme.dim)),
+            ]);
+            frame.render_widget(Paragraph::new(ann_line2), ann_rect2);
+
+            // Keymaps list
+            let keymaps = &[
+                ("Edit input in editor", "ctrl+e"),
+                ("Toggle plan mode", "tab"),
+                ("Paste clipboard image", "ctrl+g"),
+                ("Quit TUI", "ctrl+c"),
+            ];
+
+            for (i, (desc, key)) in keymaps.iter().enumerate() {
+                let y = inner.y + 6 + i as u16;
+                let desc_rect = Rect::new(right_x, y, right_width.saturating_sub(10), 1);
+                let key_rect = Rect::new(right_x + right_width - 8, y, 8, 1);
+
+                frame.render_widget(Paragraph::new(*desc).style(Style::default().fg(theme.label_color)), desc_rect);
+                frame.render_widget(
+                    Paragraph::new(*key).style(Style::default().fg(theme.dim)).alignment(ratatui::layout::Alignment::Right),
+                    key_rect
+                );
+            }
+        } else {
+            // Smaller fallback logo for small terminals
+            let fallback_line = "Fusion Build Beta";
+            let start_x = area.x + (area.width.saturating_sub(fallback_line.len() as u16) / 2);
+            let start_y = area.y + area.height / 2;
+            frame.render_widget(
+                Paragraph::new(fallback_line).style(Style::default().fg(theme.dim)),
+                Rect::new(start_x, start_y, (fallback_line.len() as u16).min(area.width), 1)
+            );
+        }
+        return;
+    }
+
     let wrap_width = (area.width as usize).saturating_sub(2);
     let width = wrap_width;
 
@@ -790,6 +900,48 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
 
     let mut remaining = text.as_str();
     while !remaining.is_empty() {
+        // Check for @token (e.g. @image_1234567890.png) — render as blue pill
+        if let Some(at_pos) = remaining.find('@') {
+            // Emit any text before the '@'
+            if at_pos > 0 {
+                let before = &remaining[..at_pos];
+                spans.push(Span::styled(
+                    before.to_string(),
+                    Style::default()
+                        .fg(theme.label_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                visual_len += before.chars().count() as u16;
+            }
+            // Find the end of the @token (space or end of string)
+            let rest = &remaining[at_pos..];
+            let token_end = rest.find(' ').unwrap_or(rest.len());
+            let token = &rest[..token_end];
+            // Only treat as a special token if it looks like @filename (contains a '.')
+            if token.contains('.') {
+                spans.push(Span::styled(
+                    token.to_string(),
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Rgb(59, 130, 246))
+                        .add_modifier(Modifier::BOLD),
+                ));
+                visual_len += token.chars().count() as u16;
+                remaining = &rest[token_end..];
+            } else {
+                // Not a file token — emit the '@' as normal text and continue
+                spans.push(Span::styled(
+                    "@".to_string(),
+                    Style::default()
+                        .fg(theme.label_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                visual_len += 1;
+                remaining = &rest[1..];
+            }
+            continue;
+        }
+
         if let Some(start_idx) = remaining.find('[') {
             if start_idx > 0 {
                 let segment = &remaining[..start_idx];
@@ -889,7 +1041,9 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         (Line::from(new_spans), max_width as u16)
     };
 
-    let input_widget = Paragraph::new(scrolled_line).block(input_block);
+    let input_widget = Paragraph::new(scrolled_line)
+        .block(input_block)
+        .style(Style::default().fg(theme.label_color));
     frame.render_widget(input_widget, area);
 
     if !app.is_thinking {
@@ -902,14 +1056,71 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
 }
 
 fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Theme) {
-    let item_count = app.autocomplete_items.len().min(10);
-    let popup_height = item_count as u16 + 2;
+    use crate::app::AutocompleteMode;
+
+    const VISIBLE: usize = 8;
+
+    // ── KeyInput mode: special overlay with a live-typed key preview ───────────
+    if app.autocomplete_mode == AutocompleteMode::KeyInput {
+        let popup_height = 5u16;
+        let popup_y = if input_area.y >= popup_height {
+            input_area.y - popup_height
+        } else { 0 };
+        let popup_width = input_area.width;
+        let popup_x = input_area.x;
+        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+        frame.render_widget(Clear, popup_area);
+
+        let provider = app.pending_provider.as_deref().unwrap_or("Provider");
+        let masked: String = app.key_buffer.chars().map(|_| '•').collect();
+        let display = if app.key_buffer.is_empty() {
+            "▌".to_string()  // blinking cursor placeholder
+        } else {
+            format!("{}▌", masked)
+        };
+
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(
+                    format!(" {} API key ", provider),
+                    Style::default().fg(Color::Rgb(34, 197, 94)).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Key: ", Style::default().fg(theme.dim)),
+                Span::styled(display, Style::default().fg(theme.label_color).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "  Enter to save · Esc to cancel",
+                    Style::default().fg(theme.dim),
+                ),
+            ]),
+        ];
+
+        let popup = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Rgb(34, 197, 94)))
+                .style(Style::default().bg(theme.autocomplete_bg))
+                .title(Span::styled(
+                    " /providers ",
+                    Style::default().fg(Color::Rgb(34, 197, 94)).add_modifier(Modifier::BOLD),
+                )),
+        );
+        frame.render_widget(popup, popup_area);
+        return;
+    }
+
+    // ── Standard list popup (scrollable) ──────────────────────────────────────
+    let total = app.autocomplete_items.len();
+    let visible_count = total.min(VISIBLE);
+    let popup_height = visible_count as u16 + 2;
 
     let popup_y = if input_area.y >= popup_height {
         input_area.y - popup_height
-    } else {
-        0
-    };
+    } else { 0 };
 
     let popup_width = input_area.width;
     let popup_area = Rect::new(input_area.x, popup_y, popup_width, popup_height);
@@ -918,7 +1129,14 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
     let mut lines: Vec<Line> = Vec::new();
     let inner_width = (popup_width as usize).saturating_sub(2);
 
-    for (i, item) in app.autocomplete_items.iter().take(10).enumerate() {
+    let scroll = app.autocomplete_scroll;
+    let visible_items = app.autocomplete_items
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(VISIBLE);
+
+    for (i, item) in visible_items {
         let is_selected = i == app.autocomplete_selected;
 
         let prefix = if is_selected { "\u{276f} " } else { "  " };
@@ -929,8 +1147,17 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
             (theme.label_color, theme.autocomplete_bg)
         };
 
+        // Type icon for Files/Providers mode
+        let type_icon = match app.autocomplete_mode {
+            AutocompleteMode::Files => {
+                if item.description == "directory" { "  " }
+                else { " " }
+            }
+            _ => "",
+        };
+
         let current_tag = if item.is_current { " (current)" } else { "" };
-        let name_padded = format!("{}{:<14}{}", prefix, item.label, current_tag);
+        let name_padded = format!("{}{}{:<14}{}", prefix, type_icon, item.label, current_tag);
         let desc = format!("  {}", item.description);
         let text_len = name_padded.chars().count() + desc.chars().count();
         let trail = if inner_width > text_len {
@@ -950,20 +1177,29 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
                     .fg(if is_selected { Color::LightCyan } else { theme.dim })
                     .bg(bg),
             ),
-            Span::styled(
-                trail,
-                Style::default().bg(bg),
-            ),
+            Span::styled(trail, Style::default().bg(bg)),
         ]));
     }
 
-    let count_str = format!(" {} ", app.autocomplete_items.len());
+    // Count / scroll indicator
+    let scroll_up = if scroll > 0 { " ↑ " } else { "" };
+    let scroll_down = if scroll + VISIBLE < total { " ↓ " } else { "" };
+    let count_str = format!(" {}{}/{}{} ", scroll_up, app.autocomplete_selected + 1, total, scroll_down);
+
+    let (border_color, title_str) = match app.autocomplete_mode {
+        AutocompleteMode::Files =>
+            (Color::Rgb(59, 130, 246), " @mention · Tab/⏎ accept · Esc dismiss ".to_string()),
+        AutocompleteMode::Providers =>
+            (Color::Rgb(34, 197, 94), " Select provider ".to_string()),
+        _ => (theme.popup_border, String::new()),
+    };
 
     let popup = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.popup_border))
+            .border_style(Style::default().fg(border_color))
             .style(Style::default().bg(theme.autocomplete_bg))
+            .title(Span::styled(title_str, Style::default().fg(border_color).add_modifier(Modifier::BOLD)))
             .title_bottom(Span::styled(count_str, Style::default().fg(theme.dim))),
     );
 

@@ -108,15 +108,17 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                     println!("model={}  mode={}", config.model, current_mode);
                 }
                 "/image" => {
-                    let cwd = std::env::current_dir()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    match crate::clipboard::save_clipboard_image(&cwd) {
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .map(|d| d.as_secs()).unwrap_or(0);
+                    let filename = format!("image_{}.png", timestamp);
+                    let dest_path = cwd.join(&filename);
+                    match crate::clipboard::save_clipboard_image(&dest_path) {
                         Ok(path) => {
-                            let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                            println!("\x1b[32mSaved clipboard image to ./{}\x1b[0m", filename);
-                            println!("\x1b[90mWill be automatically attached to your next prompt.\x1b[0m");
+                            let fname = path.file_name().unwrap_or_default().to_string_lossy();
+                            println!("\x1b[32mSaved clipboard image to ./{}\x1b[0m", fname);
+                            println!("\x1b[90mMention it with @{} in your prompt.\x1b[0m", fname);
                             let link = format!(" [image](file://{})", path.to_string_lossy());
                             pending_image = Some(link);
                         }
@@ -158,7 +160,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                 match event {
                     AgentEvent::Thinking(text) => {
                         if is_first_thinking {
-                            print!("\x1b[38;2;139;92;246m◆ Thinking:\x1b[0m \x1b[90m");
+                            print!("\x1b[38;2;139;92;246m> Thinking:\x1b[0m \x1b[90m");
                             is_first_thinking = false;
                         }
                         print!("{}", text);
@@ -191,7 +193,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             print!("{}", flushed);
                         }
                         is_first_text = true;
-                        println!("\n  \x1b[90m┌── [tool: {}]\x1b[0m", name);
+                        println!("\n  \x1b[90m+-- [tool: {}]\x1b[0m", name);
                         let display_cmd = if name == "run_command" {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&args_preview) {
                                 v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args_preview[..args_preview.len().min(200)].to_string())
@@ -201,7 +203,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                         } else {
                             args_preview[..args_preview.len().min(200)].to_string()
                         };
-                        println!("  \x1b[90m│\x1b[0m \x1b[38;2;106;191;106;1m$ {}\x1b[0m", display_cmd);
+                        println!("  \x1b[90m|\x1b[0m \x1b[38;2;106;191;106;1m$ {}\x1b[0m", display_cmd);
                     }
                     AgentEvent::ToolResult { name: _, output } => {
                         let cleaned = output.replace("\r\n", "\n");
@@ -212,9 +214,9 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             cleaned
                         };
                         for line in truncated.lines() {
-                            println!("  \x1b[90m│\x1b[0m \x1b[38;2;192;192;192m{}\x1b[0m", line);
+                            println!("  \x1b[90m|\x1b[0m \x1b[38;2;192;192;192m{}\x1b[0m", line);
                         }
-                        println!("  \x1b[90m└──\x1b[0m");
+                        println!("  \x1b[90m+--\x1b[0m");
                     }
                     AgentEvent::FinalResponse(_text) => {
                         if !is_first_thinking {
@@ -238,12 +240,12 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                         println!();
                     }
                     AgentEvent::TodoUpdate(todos) => {
-                        println!("\n  \x1b[38;2;232;164;101;1m◆ Implementation Plan\x1b[0m");
+                        println!("\n  \x1b[38;2;232;164;101;1m* Implementation Plan\x1b[0m");
                         for t in &todos {
                             let (icon, color) = match t.status.as_str() {
-                                "done" => ("✓", "\x1b[32m"),
-                                "in_progress" => ("→", "\x1b[33m"),
-                                _ => ("○", "\x1b[90m"),
+                                "done" => ("[x]", "\x1b[32m"),
+                                "in_progress" => ("[>]", "\x1b[33m"),
+                                _ => ("[ ]", "\x1b[90m"),
                             };
                             println!("    {}{} {}\x1b[0m", color, icon, t.content);
                         }

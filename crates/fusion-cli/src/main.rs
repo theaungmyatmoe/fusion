@@ -1,5 +1,5 @@
 use clap::Parser;
-use fusion_core::config::{is_ish, is_termux, load_config};
+use fusion_core::config::load_config;
 use fusion_core::session::Session;
 use std::io::Write;
 use std::path::PathBuf;
@@ -275,22 +275,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Interactive mode
-    let termux = is_termux();
-    let ish = is_ish();
-    let use_simple = cli.simple || (ish && !cli.tui);
+    // Interactive mode — TUI is the default on all platforms
+    let use_simple = cli.simple;
 
     if use_simple {
-        if ish {
-            println!("fusion — iSH (iOS) emulator detected. Defaulting to lightweight REPL.");
-        } else {
-            println!("fusion — Using lightweight REPL.");
-        }
+        println!("fusion — Using lightweight REPL.");
         fusion_tui::simple::run_simple(&config).await?;
     } else {
-        if termux {
-            eprintln!("Note: Running rich TUI on Termux.");
-        }
         fusion_tui::app::run_tui_with_session(&config, resume_session).await?;
     }
 

@@ -1,23 +1,9 @@
-pub fn save_clipboard_image(_cwd: &str) -> Result<std::path::PathBuf, String> {
+pub fn save_clipboard_image(target_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let target_path_str = target_path.to_string_lossy();
+
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        use std::time::SystemTime;
-
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let filename = format!("image_{}.png", timestamp);
-
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let cache_dir = std::path::Path::new(&home).join(".fusioncode");
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            return Err(format!("Failed to create cache directory: {}", e));
-        }
-        let target_path = cache_dir.join(&filename);
-        let target_path_str = target_path.to_string_lossy();
-
         // Safe AppleScript command supporting both file URLs (class furl) and screenshots (class PNGf)
         let script = format!(
             "try\n\
@@ -62,13 +48,16 @@ pub fn save_clipboard_image(_cwd: &str) -> Result<std::path::PathBuf, String> {
                                     || ext_lower == "webp"
                                     || ext_lower == "gif"
                                 {
-                                    return Ok(path);
+                                    if let Err(e) = std::fs::copy(&path, target_path) {
+                                        return Err(format!("Failed to copy image: {}", e));
+                                    }
+                                    return Ok(target_path.to_path_buf());
                                 }
                             }
                         }
                         Err("Clipboard contains a file, but it is not a supported image format.".to_string())
                     } else {
-                        Ok(target_path)
+                        Ok(target_path.to_path_buf())
                     }
                 } else {
                     let err_msg = String::from_utf8_lossy(&out.stderr);
@@ -82,10 +71,57 @@ pub fn save_clipboard_image(_cwd: &str) -> Result<std::path::PathBuf, String> {
             Err(e) => Err(format!("Failed to execute osascript: {}", e)),
         }
     }
+
     #[cfg(not(target_os = "macos"))]
     {
-        let _cwd = cwd;
-        Err("Clipboard image extraction is only supported on macOS.".to_string())
+        use std::process::Command;
+        // 1. Try termux-storage-get (Android/Termux)
+        let has_termux_storage = Command::new("which")
+            .arg("termux-storage-get")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if has_termux_storage {
+            // termux-storage-get will open the system file picker to select a file and save it to target_path
+            let output = Command::new("termux-storage-get")
+                .arg(target_path)
+                .output();
+
+            match output {
+                Ok(out) => {
+                    if out.status.success() && target_path.exists() {
+                        return Ok(target_path.to_path_buf());
+                    } else {
+                        return Err("Termux storage picker cancelled or failed.".to_string());
+                    }
+                }
+                Err(e) => return Err(format!("Failed to run termux-storage-get: {}", e)),
+            }
+        }
+
+        // 2. Try wl-paste (Wayland)
+        if let Ok(output) = Command::new("wl-paste").args(&["-t", "image/png"]).output() {
+            if output.status.success() && !output.stdout.is_empty() {
+                if std::fs::write(target_path, output.stdout).is_ok() {
+                    return Ok(target_path.to_path_buf());
+                }
+            }
+        }
+
+        // 3. Try xclip (X11)
+        if let Ok(output) = Command::new("xclip")
+            .args(&["-selection", "clipboard", "-t", "image/png", "-o"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if std::fs::write(target_path, output.stdout).is_ok() {
+                    return Ok(target_path.to_path_buf());
+                }
+            }
+        }
+
+        Err("No supported image attachment utility found (termux-storage-get, wl-paste, xclip).".to_string())
     }
 }
 
@@ -110,50 +146,70 @@ pub fn get_clipboard_text() -> Result<String, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Clipboard text extraction is only supported on macOS.".to_string())
+        use std::process::Command;
+        // 1. Try termux-clipboard-get (Termux)
+        if let Ok(output) = Command::new("termux-clipboard-get").output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout).to_string();
+                if !text.is_empty() {
+                    return Ok(text);
+                }
+            }
+        }
+        // 2. Try wl-paste (Wayland)
+        if let Ok(output) = Command::new("wl-paste").output() {
+            if output.status.success() {
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+        }
+        // 3. Try xclip (X11)
+        if let Ok(output) = Command::new("xclip").args(&["-selection", "clipboard", "-o"]).output() {
+            if output.status.success() {
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+        }
+        Err("No clipboard text utility found (termux-clipboard-get, wl-paste, xclip).".to_string())
     }
 }
 
 pub fn edit_text_in_editor(seed: &str) -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::env;
-        use std::fs;
-        use std::process::Command;
+    use std::env;
+    use std::fs;
+    use std::process::Command;
 
-        let editor = env::var("VISUAL")
-            .or_else(|_| env::var("EDITOR"))
-            .unwrap_or_else(|_| "nano".to_string());
-
-        let temp_dir = env::temp_dir();
-        let temp_file = temp_dir.join("fusion_message.md");
-        if let Err(e) = fs::write(&temp_file, seed) {
-            return Err(format!("Failed to write temp file: {}", e));
-        }
-
-        let mut cmd = Command::new(&editor);
-        cmd.arg(&temp_file)
-            .stdin(std::process::Stdio::inherit())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit());
-
-        let status = cmd.status();
-
-        match status {
-            Ok(s) => {
-                if s.success() {
-                    fs::read_to_string(&temp_file)
-                        .map_err(|e| format!("Failed to read temp file: {}", e))
-                } else {
-                    Err(format!("Editor {} exited with non-zero status", editor))
-                }
+    let editor = env::var("VISUAL")
+        .or_else(|_| env::var("EDITOR"))
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "windows") {
+                "notepad".to_string()
+            } else {
+                "nano".to_string()
             }
-            Err(e) => Err(format!("Failed to launch editor {}: {}", editor, e)),
-        }
+        });
+
+    let temp_dir = env::temp_dir();
+    let temp_file = temp_dir.join("fusion_message.md");
+    if let Err(e) = fs::write(&temp_file, seed) {
+        return Err(format!("Failed to write temp file: {}", e));
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _seed = seed;
-        Err("External editor is only supported on macOS.".to_string())
+
+    let mut cmd = Command::new(&editor);
+    cmd.arg(&temp_file)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    let status = cmd.status();
+
+    match status {
+        Ok(s) => {
+            if s.success() {
+                fs::read_to_string(&temp_file)
+                    .map_err(|e| format!("Failed to read temp file: {}", e))
+            } else {
+                Err(format!("Editor {} exited with non-zero status", editor))
+            }
+        }
+        Err(e) => Err(format!("Failed to launch editor {}: {}", editor, e)),
     }
 }

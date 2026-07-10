@@ -475,6 +475,86 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
     })
 }
 
+/// Save (upsert) an API key into the global config file at `~/.config/fusion/fusion.toml`.
+/// Preserves all existing content — only updates or inserts the `api_key` field under
+/// `[provider.cloudflare]` (and `[provider.xai]` if key looks like an xAI key).
+pub fn save_api_key(key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let home = dirs::home_dir().ok_or("cannot determine home directory")?;
+    let config_dir = home.join(".config").join("fusion");
+    std::fs::create_dir_all(&config_dir)?;
+    let config_path = config_dir.join("fusion.toml");
+
+    // Read existing content or start fresh
+    let existing = if config_path.exists() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::new()
+    };
+
+    // Determine which provider the key belongs to based on prefix heuristics
+    let is_xai = key.starts_with("xai-");
+    let is_cf   = key.starts_with("cfat_") || key.starts_with("cf_");
+
+    // Parse as TOML document using raw string manipulation to preserve formatting.
+    // Strategy: if the relevant section already exists, replace the api_key line.
+    // Otherwise, append the whole section.
+    let section = if is_xai { "[provider.xai]" } else { "[provider.cloudflare]" };
+
+    let new_content = if existing.contains(section) {
+        // Replace the api_key inside the existing section
+        let mut result = String::new();
+        let mut in_section = false;
+        let mut key_written = false;
+        for line in existing.lines() {
+            let trimmed = line.trim();
+            if trimmed == section {
+                in_section = true;
+                result.push_str(line);
+                result.push('\n');
+                continue;
+            }
+            if in_section && trimmed.starts_with("api_key") {
+                result.push_str(&format!("api_key = \"{}\"\n", key));
+                key_written = true;
+                continue;
+            }
+            if in_section && trimmed.starts_with('[') && trimmed != section {
+                // Entering a new section — write key if not yet written
+                if !key_written {
+                    result.push_str(&format!("api_key = \"{}\"\n", key));
+                    key_written = true;
+                }
+                in_section = false;
+            }
+            result.push_str(line);
+            result.push('\n');
+        }
+        if in_section && !key_written {
+            result.push_str(&format!("api_key = \"{}\"\n", key));
+        }
+        result
+    } else {
+        // Append the section
+        let mut result = existing.clone();
+        if !result.is_empty() && !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push('\n');
+        result.push_str(section);
+        result.push('\n');
+        // Add account_id placeholder for Cloudflare
+        if is_cf || (!is_xai && !is_cf) {
+            result.push_str("# account_id = \"your-cloudflare-account-id\"\n");
+        }
+        result.push_str(&format!("api_key = \"{}\"\n", key));
+        result
+    };
+
+    fs::write(&config_path, new_content)?;
+    Ok(())
+}
+
+
 /// Check if a model string refers to a Cloudflare Workers AI model.
 pub fn is_cloudflare_model(model: &str) -> bool {
     model.starts_with("@cf/")

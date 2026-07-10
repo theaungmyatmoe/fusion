@@ -49,10 +49,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/yolo", description: "Toggle auto-approve mode", has_submenu: false },
     SlashCommand { name: "/plan", description: "Enter plan mode", has_submenu: false },
     SlashCommand { name: "/model", description: "Switch the active model", has_submenu: true },
-    SlashCommand { name: "/models", description: "List available models", has_submenu: false },
     SlashCommand { name: "/max", description: "Set output to maximum tokens", has_submenu: false },
     SlashCommand { name: "/high", description: "Set output to high tokens", has_submenu: false },
     SlashCommand { name: "/normal", description: "Set output to normal tokens", has_submenu: false },
+    SlashCommand { name: "/key", description: "Set provider API key (saved to config)", has_submenu: false },
+    SlashCommand { name: "/providers", description: "Configure provider & API key", has_submenu: true },
     SlashCommand { name: "/status", description: "Show current settings", has_submenu: false },
     SlashCommand { name: "/session", description: "Show current session ID", has_submenu: false },
     SlashCommand { name: "/sessions", description: "List saved sessions", has_submenu: false },
@@ -77,6 +78,12 @@ pub enum AutocompleteMode {
     Models,
     /// Effort/token level picker (shown after selecting a model that supports it)
     Effort,
+    /// @ file/folder/image picker
+    Files,
+    /// Provider picker (cloudflare / xai / openai)
+    Providers,
+    /// Key input overlay — user types their API key here
+    KeyInput,
 }
 
 /// An item in the autocomplete popup (works for both commands and models).
@@ -104,6 +111,14 @@ pub struct App {
     pub autocomplete_mode: AutocompleteMode,
     pub autocomplete_items: Vec<AutocompleteItem>,
     pub autocomplete_selected: usize,
+    /// Scroll offset for the visible window in the autocomplete popup
+    pub autocomplete_scroll: usize,
+    /// Tracks what user has typed after `@` for file filtering
+    pub at_query: String,
+    /// Buffer used when in KeyInput mode — holds the API key being typed
+    pub key_buffer: String,
+    /// Which provider the user selected in the Providers picker
+    pub pending_provider: Option<String>,
 
     // Pending model shorthand (used during effort selection)
     pending_model: Option<String>,
@@ -119,6 +134,9 @@ pub struct App {
     pub last_key_time: Option<Instant>,
     pub in_paste_burst: bool,
     pub submitted_text: Option<String>,
+
+    /// When Some(_), a Ctrl+C was pressed and we're waiting for a second one to confirm quit
+    pub quit_pending: Option<Instant>,
 
     /// Attached images (file paths) for the current prompt — shown as [Image #N] tags
     pub attached_images: Vec<String>,
@@ -171,29 +189,38 @@ fn detect_theme(config: &Config) -> String {
         }
     }
 
-    // 2. Detect macOS system theme
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleInterfaceStyle"])
-            .output()
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if stdout.trim().eq_ignore_ascii_case("Dark") {
-                    return "dark".to_string();
-                }
-            }
-        }
-    }
-
-    // 3. Default to dark on Termux
+    // 2. Default to dark on Termux (Android)
     if fusion_core::config::is_termux() {
         return "dark".to_string();
     }
 
-    // Default fallback
-    "dark".to_string()
+    // 3. Detect macOS system theme
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS in Dark mode: `defaults read -g AppleInterfaceStyle` prints "Dark" (exit 0)
+        // On macOS in Light mode: the key doesn't exist, so the command exits non-zero
+        match std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.trim().eq_ignore_ascii_case("Dark") {
+                    return "dark".to_string();
+                } else {
+                    return "light".to_string();
+                }
+            }
+            _ => {
+                // Command failed = system is in Light mode
+                return "light".to_string();
+            }
+        }
+    }
+
+    // Default fallback — prefer light (dark text on unknown bg is always readable)
+    #[allow(unreachable_code)]
+    "light".to_string()
 }
 
 impl App {
@@ -229,6 +256,10 @@ impl App {
             autocomplete_mode: AutocompleteMode::Commands,
             autocomplete_items: Vec::new(),
             autocomplete_selected: 0,
+            autocomplete_scroll: 0,
+            at_query: String::new(),
+            key_buffer: String::new(),
+            pending_provider: None,
             pending_model: None,
             turn_start: None,
             thought_duration: None,
@@ -247,6 +278,7 @@ impl App {
             grill_mode: false,
             arbitrage_mode: false,
             active_grill_question: None,
+            quit_pending: None,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -300,6 +332,10 @@ impl App {
             autocomplete_mode: AutocompleteMode::Commands,
             autocomplete_items: Vec::new(),
             autocomplete_selected: 0,
+            autocomplete_scroll: 0,
+            at_query: String::new(),
+            key_buffer: String::new(),
+            pending_provider: None,
             pending_model: None,
             turn_start: None,
             thought_duration: None,
@@ -318,6 +354,7 @@ impl App {
             grill_mode: false,
             arbitrage_mode: false,
             active_grill_question: None,
+            quit_pending: None,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -450,6 +487,13 @@ impl App {
     pub fn handle_tick(&mut self) {
         self.tick_count = self.tick_count.wrapping_add(1);
 
+        // Auto-expire the quit-pending confirmation after 2s
+        if let Some(pending_at) = self.quit_pending {
+            if pending_at.elapsed().as_secs_f32() >= 2.0 {
+                self.quit_pending = None;
+            }
+        }
+
         if self.in_paste_burst {
             if let Some(last_time) = self.last_key_time {
                 if Instant::now().duration_since(last_time) >= std::time::Duration::from_millis(50) {
@@ -491,12 +535,24 @@ impl App {
             parts.push(block.clone());
         }
 
+        // The input already contains @image_xxx.png tokens inline; include them verbatim.
+        // Additionally append file:// references so the LLM client can base64-encode images.
         if !self.input.trim().is_empty() {
             parts.push(self.input.trim().to_string());
         }
 
-        for (i, path) in self.attached_images.iter().enumerate() {
-            parts.push(format!("[image {}](file://{})", i + 1, path));
+        for path in self.attached_images.iter() {
+            // Skip pending placeholders
+            if path.starts_with("PENDING:") {
+                continue;
+            }
+            let abs_path = if std::path::Path::new(path).is_absolute() {
+                std::path::PathBuf::from(path)
+            } else {
+                std::path::Path::new(&self.session.cwd).join(path)
+            };
+            // Append as a markdown image link so extract_local_image_paths picks it up
+            parts.push(format!("[attached image](file://{})", abs_path.to_string_lossy()));
         }
 
         parts.join("\n\n")
@@ -515,32 +571,36 @@ impl App {
             }
         }
 
+        // Input already contains inline @image_xxx.png tokens — use it as-is.
         if !self.input.trim().is_empty() {
             parts.push(self.input.trim().to_string());
-        }
-
-        for (i, _path) in self.attached_images.iter().enumerate() {
-            parts.push(format!("[Image #{}]", i + 1));
         }
 
         parts.join(" ")
     }
 
     pub fn handle_paste(&mut self, text: String) {
-        if let Some(_path) = try_parse_image_path(&text) {
-            let img_id = self.attached_images.len() + 1;
-            let pending_tag = format!("PENDING:{}", img_id);
-            self.attached_images.push(pending_tag);
+        if let Some(src_path) = try_parse_image_path(&text) {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let filename = format!("image_{}.png", timestamp);
+            let cwd = self.session.cwd.clone();
+            let dest_path = std::path::Path::new(&cwd).join(&filename);
 
-            let token = format!("[Image #{}] ", img_id);
+            let token = format!("@{} ", filename);
             self.input.push_str(&token);
 
-            let cwd = self.session.cwd.clone();
-            let tx = self.event_tx.clone();
+            let pending_tag = format!("PENDING:{}", dest_path.to_string_lossy());
+            self.attached_images.push(pending_tag);
 
+            let tx = self.event_tx.clone();
             tokio::spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::clipboard::save_clipboard_image(&cwd)
+                    std::fs::copy(&src_path, &dest_path)
+                        .map(|_| dest_path.clone())
+                        .map_err(|e| e.to_string())
                 })
                 .await
                 .unwrap_or_else(|_| Err("Background thread panic".to_string()));
@@ -700,16 +760,72 @@ impl App {
         }
 
         if self.autocomplete_visible {
+            // KeyInput mode: typing goes to key_buffer, not the main input
+            if self.autocomplete_mode == AutocompleteMode::KeyInput {
+                match (key.modifiers, key.code) {
+                    (_, KeyCode::Esc) => {
+                        self.close_autocomplete();
+                        return;
+                    }
+                    (_, KeyCode::Enter) => {
+                        let key_val = self.key_buffer.trim().to_string();
+                        if !key_val.is_empty() {
+                            match fusion_core::config::save_api_key(&key_val) {
+                                Ok(()) => {
+                                    let masked = if key_val.len() > 8 {
+                                        format!("{}...{}", &key_val[..4], &key_val[key_val.len()-4..])
+                                    } else { "****".to_string() };
+                                    let provider = self.pending_provider.clone().unwrap_or_default();
+                                    self.messages.push(Message {
+                                        role: "system".to_string(),
+                                        content: format!(
+                                            "API key for {} saved to ~/.config/fusion/fusion.toml\nKey: {}\nRestart to apply.",
+                                            provider, masked
+                                        ),
+                                    });
+                                }
+                                Err(e) => {
+                                    self.messages.push(Message {
+                                        role: "system".to_string(),
+                                        content: format!("Failed to save key: {}", e),
+                                    });
+                                }
+                            }
+                        }
+                        self.close_autocomplete();
+                        return;
+                    }
+                    (_, KeyCode::Backspace) => {
+                        self.key_buffer.pop();
+                        return;
+                    }
+                    (_, KeyCode::Char(c)) => {
+                        self.key_buffer.push(c);
+                        return;
+                    }
+                    _ => { return; }
+                }
+            }
+
+            const VISIBLE: usize = 8; // visible rows in popup
             match (key.modifiers, key.code) {
                 (_, KeyCode::Up) => {
                     if self.autocomplete_selected > 0 {
                         self.autocomplete_selected -= 1;
+                        // Scroll up if selection moves above viewport
+                        if self.autocomplete_selected < self.autocomplete_scroll {
+                            self.autocomplete_scroll = self.autocomplete_selected;
+                        }
                     }
                     return;
                 }
                 (_, KeyCode::Down) => {
                     if self.autocomplete_selected + 1 < self.autocomplete_items.len() {
                         self.autocomplete_selected += 1;
+                        // Scroll down if selection moves below viewport
+                        if self.autocomplete_selected >= self.autocomplete_scroll + VISIBLE {
+                            self.autocomplete_scroll = self.autocomplete_selected + 1 - VISIBLE;
+                        }
                     }
                     return;
                 }
@@ -727,10 +843,23 @@ impl App {
             }
         }
 
+        // Any key other than Ctrl+C clears the quit confirmation banner
+        if !matches!((key.modifiers, key.code), (KeyModifiers::CONTROL, KeyCode::Char('c'))) {
+            self.quit_pending = None;
+        }
+
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                self.save_session();
-                self.should_quit = true;
+                if let Some(pending_at) = self.quit_pending {
+                    if pending_at.elapsed().as_secs_f32() < 2.0 {
+                        // Second Ctrl+C within 2s — actually quit
+                        self.save_session();
+                        self.should_quit = true;
+                        return;
+                    }
+                }
+                // First Ctrl+C — show confirmation prompt
+                self.quit_pending = Some(Instant::now());
             }
             (KeyModifiers::CONTROL, KeyCode::Char('v')) | (KeyModifiers::SUPER, KeyCode::Char('v')) => {
                 // 1. Try reading clipboard text first (lightning fast!)
@@ -742,19 +871,23 @@ impl App {
                 }
 
                 // 2. Clipboard is empty or contains an image. Extract it in the background!
-                let img_id = self.attached_images.len() + 1;
-                let pending_tag = format!("PENDING:{}", img_id);
-                self.attached_images.push(pending_tag);
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs()).unwrap_or(0);
+                let filename = format!("image_{}.png", timestamp);
+                let cwd = self.session.cwd.clone();
+                let dest_path = std::path::Path::new(&cwd).join(&filename);
 
-                let token = format!("[Image #{}] ", img_id);
+                let token = format!("@{} ", filename);
                 self.input.push_str(&token);
 
-                let cwd = self.session.cwd.clone();
-                let tx = self.event_tx.clone();
+                let pending_tag = format!("PENDING:{}", dest_path.to_string_lossy());
+                self.attached_images.push(pending_tag);
 
+                let tx = self.event_tx.clone();
                 tokio::spawn(async move {
                     let result = tokio::task::spawn_blocking(move || {
-                        crate::clipboard::save_clipboard_image(&cwd)
+                        crate::clipboard::save_clipboard_image(&dest_path)
                     })
                     .await
                     .unwrap_or_else(|_| Err("Background thread panic".to_string()));
@@ -763,19 +896,23 @@ impl App {
                 });
             }
             (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
-                let img_id = self.attached_images.len() + 1;
-                let pending_tag = format!("PENDING:{}", img_id);
-                self.attached_images.push(pending_tag);
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs()).unwrap_or(0);
+                let filename = format!("image_{}.png", timestamp);
+                let cwd = self.session.cwd.clone();
+                let dest_path = std::path::Path::new(&cwd).join(&filename);
 
-                let token = format!("[Image #{}] ", img_id);
+                let token = format!("@{} ", filename);
                 self.input.push_str(&token);
 
-                let cwd = self.session.cwd.clone();
-                let tx = self.event_tx.clone();
+                let pending_tag = format!("PENDING:{}", dest_path.to_string_lossy());
+                self.attached_images.push(pending_tag);
 
+                let tx = self.event_tx.clone();
                 tokio::spawn(async move {
                     let result = tokio::task::spawn_blocking(move || {
-                        crate::clipboard::save_clipboard_image(&cwd)
+                        crate::clipboard::save_clipboard_image(&dest_path)
                     })
                     .await
                     .unwrap_or_else(|_| Err("Background thread panic".to_string()));
@@ -830,19 +967,25 @@ impl App {
                 let has_tags = !self.pasted_blocks.is_empty() || !self.attached_images.is_empty();
                 if !text.is_empty() || has_tags {
                     if text == "/image" || text.starts_with("/image ") {
+                        let timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .map(|d| d.as_secs()).unwrap_or(0);
+                        let filename = format!("image_{}.png", timestamp);
                         let cwd = self.session.cwd.clone();
-                        match crate::clipboard::save_clipboard_image(&cwd) {
+                        let dest_path = std::path::Path::new(&cwd).join(&filename);
+                        match crate::clipboard::save_clipboard_image(&dest_path) {
                             Ok(path) => {
                                 self.attached_images.push(path.to_string_lossy().to_string());
+                                self.input = format!("@{} ", filename);
                             }
                             Err(e) => {
                                 self.messages.push(Message {
                                     role: "system".to_string(),
                                     content: format!("Error saving image: {}", e),
                                 });
+                                self.input.clear();
                             }
                         }
-                        self.input.clear();
                     } else {
                         if self.attached_images.iter().any(|s| s.starts_with("PENDING:")) {
                             self.messages.push(Message {
@@ -861,16 +1004,46 @@ impl App {
             }
             (_, KeyCode::Char(c)) => {
                 self.input.push(c);
-                self.update_autocomplete();
+                if c == '@' && self.autocomplete_mode != AutocompleteMode::Files {
+                    // Open file picker immediately on '@'
+                    self.at_query.clear();
+                    self.show_file_picker("");
+                } else if self.autocomplete_mode == AutocompleteMode::Files {
+                    // User is filtering — last word after '@' is the query
+                    if let Some(at_pos) = self.input.rfind('@') {
+                        self.at_query = self.input[at_pos + 1..].to_string();
+                        // If user typed a space, dismiss
+                        if self.at_query.contains(' ') {
+                            self.close_autocomplete();
+                        } else {
+                            let q = self.at_query.clone();
+                            self.show_file_picker(&q);
+                        }
+                    }
+                } else {
+                    self.update_autocomplete();
+                }
             }
             (_, KeyCode::Backspace) => {
                 if !self.input.is_empty() {
                     let trimmed = self.input.trim_end();
                     let mut matched_token_len = None;
                     let mut is_image_token = false;
+                    let mut deleted_image_filename: Option<String> = None;
                     let mut is_paste_token = false;
 
-                    if trimmed.ends_with(']') {
+                    // Check for @image_<timestamp>.png token at the end
+                    if let Some(last_word) = trimmed.split_whitespace().last() {
+                        if last_word.starts_with('@') && last_word.ends_with(".png") {
+                            is_image_token = true;
+                            deleted_image_filename = Some(last_word[1..].to_string());
+                            let spaces_count = self.input.len() - trimmed.len();
+                            matched_token_len = Some(last_word.len() + spaces_count);
+                        }
+                    }
+
+                    // Fallback: check for [Pasted: ...] or legacy [Image #N] bracket tokens
+                    if matched_token_len.is_none() && trimmed.ends_with(']') {
                         if let Some(start_idx) = trimmed.rfind('[') {
                             let token = &trimmed[start_idx..];
                             if token.starts_with("[Image #") {
@@ -889,7 +1062,12 @@ impl App {
                         let new_len = self.input.len() - len;
                         self.input.truncate(new_len);
                         if is_image_token {
-                            self.attached_images.pop();
+                            if let Some(ref fname) = deleted_image_filename {
+                                // Remove the specific image whose path contains this filename
+                                self.attached_images.retain(|p| !p.contains(fname.as_str()));
+                            } else {
+                                self.attached_images.pop();
+                            }
                         } else if is_paste_token {
                             self.pasted_blocks.pop();
                         }
@@ -908,7 +1086,18 @@ impl App {
                 {
                     self.autocomplete_mode = AutocompleteMode::Commands;
                 }
-                self.update_autocomplete();
+                // Files mode: update filter or close if @ was deleted
+                if self.autocomplete_mode == AutocompleteMode::Files {
+                    if let Some(at_pos) = self.input.rfind('@') {
+                        self.at_query = self.input[at_pos + 1..].to_string();
+                        let q = self.at_query.clone();
+                        self.show_file_picker(&q);
+                    } else {
+                        self.close_autocomplete();
+                    }
+                } else {
+                    self.update_autocomplete();
+                }
             }
             (_, KeyCode::Esc) => {
                 self.close_autocomplete();
@@ -921,6 +1110,10 @@ impl App {
         self.autocomplete_visible = false;
         self.autocomplete_items.clear();
         self.autocomplete_mode = AutocompleteMode::Commands;
+        self.at_query.clear();
+        self.autocomplete_scroll = 0;
+        self.key_buffer.clear();
+        self.pending_provider = None;
     }
 
     /// Accept the currently selected autocomplete item.
@@ -944,6 +1137,10 @@ impl App {
                         self.input = "/model ".to_string();
                         self.autocomplete_mode = AutocompleteMode::Models;
                         self.show_model_picker();
+                    } else if has_submenu && label == "/providers" {
+                        // Transition to provider picker
+                        self.input.clear();
+                        self.show_provider_picker();
                     } else {
                         // Execute the command directly
                         self.input.clear();
@@ -997,7 +1194,73 @@ impl App {
                     self.handle_submit(level.to_string(), None);
                 }
             }
+            AutocompleteMode::Files => {
+                if let Some(item) = self.autocomplete_items.get(selected_idx) {
+                    let selected = item.label.clone();
+                    // Replace the partial @<query> at the end of input with @<filename>
+                    let query = self.at_query.clone();
+                    let partial = format!("@{}", query);
+                    if self.input.ends_with(&partial) {
+                        let new_len = self.input.len() - partial.len();
+                        self.input.truncate(new_len);
+                    }
+                    self.input.push('@');
+                    self.input.push_str(&selected);
+                    self.input.push(' ');
+                    self.close_autocomplete();
+                }
+            }
+            AutocompleteMode::Providers => {
+                if let Some(item) = self.autocomplete_items.get(selected_idx) {
+                    let provider = item.label.clone();
+                    self.open_key_input(provider);
+                }
+            }
+            AutocompleteMode::KeyInput => {
+                // Handled entirely in the key event handler above
+            }
         }
+    }
+
+    /// Show the provider selection popup.
+    fn show_provider_picker(&mut self) {
+        self.autocomplete_items = vec![
+            AutocompleteItem {
+                label: "Cloudflare".to_string(),
+                description: "Workers AI · kimi, glm, qwen and more".to_string(),
+                is_current: false,
+            },
+            AutocompleteItem {
+                label: "xAI".to_string(),
+                description: "Grok 3, Grok 3 Mini".to_string(),
+                is_current: false,
+            },
+            AutocompleteItem {
+                label: "OpenAI".to_string(),
+                description: "GPT-4o and compatible APIs".to_string(),
+                is_current: false,
+            },
+        ];
+        self.autocomplete_mode = AutocompleteMode::Providers;
+        self.autocomplete_selected = 0;
+        self.autocomplete_scroll = 0;
+        self.autocomplete_visible = true;
+    }
+
+    /// Open the key input overlay for a given provider.
+    fn open_key_input(&mut self, provider: String) {
+        self.pending_provider = Some(provider.clone());
+        self.key_buffer.clear();
+        // Show a single placeholder item that acts as the input prompt
+        self.autocomplete_items = vec![AutocompleteItem {
+            label: format!("Enter {} API key", provider),
+            description: "Press Enter to save · Esc to cancel".to_string(),
+            is_current: false,
+        }];
+        self.autocomplete_mode = AutocompleteMode::KeyInput;
+        self.autocomplete_selected = 0;
+        self.autocomplete_scroll = 0;
+        self.autocomplete_visible = true;
     }
 
     /// Show the model picker popup.
@@ -1073,7 +1336,79 @@ impl App {
             AutocompleteMode::Effort => {
                 // Effort picker doesn't need filtering — it's a short fixed list
             }
+            AutocompleteMode::Files => {
+                // Re-filter file list from current at_query
+                let q = self.at_query.clone();
+                self.show_file_picker(&q);
+            }
+            AutocompleteMode::Providers | AutocompleteMode::KeyInput => {
+                // Static lists — no filtering needed
+            }
         }
+    }
+
+    /// Populate the file/folder autocomplete from cwd, filtered by `query`.
+    fn show_file_picker(&mut self, query: &str) {
+        let cwd = self.session.cwd.clone();
+        let dir = std::path::Path::new(&cwd);
+
+        let mut entries: Vec<(bool, String)> = Vec::new(); // (is_dir, name)
+        if let Ok(read_dir) = std::fs::read_dir(dir) {
+            for entry in read_dir.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Skip hidden files unless user explicitly types a dot
+                if name.starts_with('.') && !query.starts_with('.') {
+                    continue;
+                }
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                let lower = name.to_lowercase();
+                if query.is_empty() || lower.contains(&query.to_lowercase()) {
+                    entries.push((is_dir, name));
+                }
+            }
+        }
+
+        // Sort: dirs first, then alphabetical
+        entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+        self.autocomplete_items = entries
+            .into_iter()
+            .take(15)
+            .map(|(is_dir, name)| {
+                let ext = std::path::Path::new(&name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                let description = if is_dir {
+                    "directory".to_string()
+                } else if matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+                    format!("image · .{}", ext)
+                } else {
+                    format!("file · .{}", ext)
+                };
+                let label = if is_dir {
+                    format!("{}/", name)
+                } else {
+                    name
+                };
+                AutocompleteItem { label, description, is_current: false }
+            })
+            .collect();
+
+        // Always switch to Files mode first so the popup shows
+        self.autocomplete_mode = AutocompleteMode::Files;
+        self.autocomplete_selected = 0;
+
+        if self.autocomplete_items.is_empty() {
+            // Show a placeholder so the popup still appears
+            self.autocomplete_items = vec![AutocompleteItem {
+                label: "(empty directory)".to_string(),
+                description: "no files found".to_string(),
+                is_current: false,
+            }];
+        }
+
+        self.autocomplete_visible = true;
     }
 
     /// Show the effort/token level picker for a specific model.
@@ -1351,7 +1686,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /grill      toggle grill mode (design interview)\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /image      insert clipboard image (macOS)\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /dq [n]     clear queue or dequeue item n\n  /quit       quit (session auto-saved)".to_string(),
+                    content: "Fusion Code commands:\n  /help          show all commands\n  /yolo          toggle auto-approve\n  /plan          enter plan mode\n  /grill         toggle grill mode (design interview)\n  /model <n>     switch model (autocomplete supported)\n  /key <value>   save API key to config file\n  /max           set maximum token output\n  /high          set high token output\n  /normal        set normal token output\n  /status        current settings\n  /theme         toggle light/dark theme\n  /image         insert clipboard image\n  /session       show session ID\n  /sessions      list saved sessions\n  /clear         clear messages\n  /dq [n]        clear queue or dequeue item n\n  @filename      mention a file/image from cwd\n  /quit          quit (session auto-saved)\n  Ctrl+C twice   quit".to_string(),
                 });
             }
             "/yolo" => {
@@ -1516,6 +1851,9 @@ impl App {
                 self.save_session();
                 self.should_quit = true;
             }
+            "/providers" => {
+                self.show_provider_picker();
+            }
             "/model" => {
                 if let Some(name) = parts.get(1) {
                     let mut resolved_model = name.to_string();
@@ -1581,11 +1919,57 @@ impl App {
                     });
                 }
             }
+            "/key" => {
+                if let Some(api_key) = parts.get(1) {
+                    let key = api_key.trim().to_string();
+                    if key.is_empty() {
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: "Usage: /key <api-key-value>".to_string(),
+                        });
+                    } else {
+                        match fusion_core::config::save_api_key(&key) {
+                            Ok(()) => {
+                                // Mask all but last 4 chars for display
+                                let masked = if key.len() > 8 {
+                                    format!("{}...{}", &key[..4], &key[key.len()-4..])
+                                } else {
+                                    "****".to_string()
+                                };
+                                self.messages.push(Message {
+                                    role: "system".to_string(),
+                                    content: format!(
+                                        "API key saved to ~/.config/fusion/fusion.toml\nKey: {}\nRestart fusion to apply the new key.",
+                                        masked
+                                    ),
+                                });
+                            }
+                            Err(e) => {
+                                self.messages.push(Message {
+                                    role: "system".to_string(),
+                                    content: format!("Failed to save API key: {}", e),
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: "Usage: /key <api-key-value>\nSaves your provider API key to ~/.config/fusion/fusion.toml".to_string(),
+                    });
+                }
+            }
             "/image" => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs()).unwrap_or(0);
+                let filename = format!("image_{}.png", timestamp);
                 let cwd = self.session.cwd.clone();
-                match crate::clipboard::save_clipboard_image(&cwd) {
+                let dest_path = std::path::Path::new(&cwd).join(&filename);
+                match crate::clipboard::save_clipboard_image(&dest_path) {
                     Ok(path) => {
                         self.attached_images.push(path.to_string_lossy().to_string());
+                        self.input = format!("@{} ", filename);
                     }
                     Err(e) => {
                         self.messages.push(Message {
@@ -1790,11 +2174,17 @@ pub async fn run_tui_with_session(
                         Err(e) => {
                             // Remove the pending tag since saving failed
                             if let Some(pos) = app.attached_images.iter().position(|s| s.starts_with("PENDING:")) {
-                                app.attached_images.remove(pos);
-                                // Also remove the corresponding [Image #id] token from the input to keep it clean
-                                let img_id = pos + 1;
-                                let token = format!("[Image #{}]", img_id);
-                                app.input = app.input.replace(&token, "");
+                                let pending_str = app.attached_images.remove(pos);
+                                // Extract the filename from PENDING:/path/to/image_xxx.png
+                                if let Some(path_part) = pending_str.strip_prefix("PENDING:") {
+                                    if let Some(fname) = std::path::Path::new(path_part)
+                                        .file_name().and_then(|f| f.to_str())
+                                    {
+                                        let token = format!("@{}", fname);
+                                        app.input = app.input.replace(&format!("{} ", token), "");
+                                        app.input = app.input.replace(&token, "");
+                                    }
+                                }
                             }
                             app.messages.push(Message {
                                 role: "system".to_string(),
@@ -2093,24 +2483,25 @@ mod tests {
         assert_eq!(app.pasted_blocks.len(), 1);
         assert_eq!(app.pasted_blocks[0], multiline);
 
-        // Add some image path
+        // Add some image path (drag-drop style)
         let temp_dir = std::env::temp_dir();
         let img_path = temp_dir.join("test_img.png");
         let _ = File::create(&img_path);
         app.handle_paste(img_path.to_string_lossy().to_string());
+        // Should have one pending image
         assert_eq!(app.attached_images.len(), 1);
-        assert_eq!(app.attached_images[0], format!("PENDING:{}", 1));
-        assert!(app.input.contains("[Image #1]"));
+        assert!(app.attached_images[0].starts_with("PENDING:"));
+        // Input should contain an @image_... token
+        assert!(app.input.contains("@image_"));
 
-        // Backspace deletes characters from the input text (which contains the tags)
-        let before_len = app.input.len();
+        // Backspace should atomically delete the @image_xxx.png token
         let bs_key = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Backspace,
             crossterm::event::KeyModifiers::empty(),
         );
         app.handle_key(bs_key);
-        assert_eq!(app.input.len(), before_len - 11);
-        assert_eq!(app.input, "[Pasted: 4 lines] ");
+        // After backspace, the @image_... token should be gone and attached_images empty
+        assert!(!app.input.contains("@image_"));
         assert!(app.attached_images.is_empty());
 
         let _ = std::fs::remove_file(img_path);

@@ -120,7 +120,19 @@ pub static CLOUDFLARE_MODELS: &[ModelInfo] = &[
         supports_reasoning: false,
         category: "coding",
     },
-    // ── General / fast models ────────────────────────────────────────────────
+    ModelInfo {
+        shorthand: "gemma4",
+        full_id: "@cf/google/gemma-3-27b-it",
+        display_name: "Gemma 3 27B",
+        context_window: 131072,
+        max_tokens_normal: Some(4096),
+        max_tokens_high: Some(8192),
+        max_tokens_max: Some(16384),
+        supports_tools: true,
+        supports_reasoning: false,
+        category: "general",
+    },
+    // ── General / fast models ────────────────────────────────────────────────────────────
     ModelInfo {
         shorthand: "llama3",
         full_id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
