@@ -1008,6 +1008,12 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
 
     let right_text = format!("{}{}{}", model_display, level_str, mode_str);
 
+    let enter_hint = match app.mode {
+        AppMode::Normal => "Enter:send",
+        AppMode::Plan => "Enter:plan",
+        AppMode::Yolo => "Enter:yolo",
+    };
+
     let left_text = if app.is_thinking {
         if app.queued_prompts.is_empty() {
             "  waiting for response...".to_string()
@@ -1016,9 +1022,9 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         }
     } else {
         if cfg!(target_os = "macos") {
-            "  Enter:send  |  /help:commands  |  Ctrl+C:quit  |  Cmd+V:image".to_string()
+            format!("  {}  |  /help:commands  |  Ctrl+C:quit  |  Cmd+V:image", enter_hint)
         } else {
-            "  Enter:send  |  /help:commands  |  Ctrl+C:quit".to_string()
+            format!("  {}  |  /help:commands  |  Ctrl+C:quit", enter_hint)
         }
     };
 

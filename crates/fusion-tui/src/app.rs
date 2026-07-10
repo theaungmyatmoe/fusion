@@ -809,15 +809,14 @@ impl App {
                     AppMode::Plan => AppMode::Yolo,
                     AppMode::Yolo => AppMode::Normal,
                 };
-                let new_mode = match self.mode {
-                    AppMode::Normal => "Normal",
-                    AppMode::Plan => "Plan (exploring only)",
-                    AppMode::Yolo => "Always-Approve (YOLO)",
+            }
+            (_, KeyCode::Tab) => {
+                // Tab toggles between Normal and Plan modes
+                self.mode = match self.mode {
+                    AppMode::Normal => AppMode::Plan,
+                    AppMode::Plan => AppMode::Normal,
+                    AppMode::Yolo => AppMode::Normal,
                 };
-                self.messages.push(Message {
-                    role: "system".to_string(),
-                    content: format!("Mode switched to: {}", new_mode),
-                });
             }
             (_, KeyCode::Enter) => {
                 if self.in_paste_burst || is_paste_like {
