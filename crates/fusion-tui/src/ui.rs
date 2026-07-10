@@ -1060,59 +1060,6 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
 
     const VISIBLE: usize = 8;
 
-    // ── KeyInput mode: special overlay with a live-typed key preview ───────────
-    if app.autocomplete_mode == AutocompleteMode::KeyInput {
-        let popup_height = 5u16;
-        let popup_y = if input_area.y >= popup_height {
-            input_area.y - popup_height
-        } else { 0 };
-        let popup_width = input_area.width;
-        let popup_x = input_area.x;
-        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-        frame.render_widget(Clear, popup_area);
-
-        let provider = app.pending_provider.as_deref().unwrap_or("Provider");
-        let masked: String = app.key_buffer.chars().map(|_| '•').collect();
-        let display = if app.key_buffer.is_empty() {
-            "▌".to_string()  // blinking cursor placeholder
-        } else {
-            format!("{}▌", masked)
-        };
-
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} API key ", provider),
-                    Style::default().fg(Color::Rgb(34, 197, 94)).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  Key: ", Style::default().fg(theme.dim)),
-                Span::styled(display, Style::default().fg(theme.label_color).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "  Enter to save · Esc to cancel",
-                    Style::default().fg(theme.dim),
-                ),
-            ]),
-        ];
-
-        let popup = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(34, 197, 94)))
-                .style(Style::default().bg(theme.autocomplete_bg))
-                .title(Span::styled(
-                    " /providers ",
-                    Style::default().fg(Color::Rgb(34, 197, 94)).add_modifier(Modifier::BOLD),
-                )),
-        );
-        frame.render_widget(popup, popup_area);
-        return;
-    }
-
     // ── Standard list popup (scrollable) ──────────────────────────────────────
     let total = app.autocomplete_items.len();
     let visible_count = total.min(VISIBLE);

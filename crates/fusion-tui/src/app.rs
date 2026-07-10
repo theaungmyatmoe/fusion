@@ -82,8 +82,6 @@ pub enum AutocompleteMode {
     Files,
     /// Provider picker (cloudflare / xai / openai)
     Providers,
-    /// Key input overlay — user types their API key here
-    KeyInput,
 }
 
 /// An item in the autocomplete popup (works for both commands and models).
@@ -760,53 +758,6 @@ impl App {
         }
 
         if self.autocomplete_visible {
-            // KeyInput mode: typing goes to key_buffer, not the main input
-            if self.autocomplete_mode == AutocompleteMode::KeyInput {
-                match (key.modifiers, key.code) {
-                    (_, KeyCode::Esc) => {
-                        self.close_autocomplete();
-                        return;
-                    }
-                    (_, KeyCode::Enter) => {
-                        let key_val = self.key_buffer.trim().to_string();
-                        if !key_val.is_empty() {
-                            match fusion_core::config::save_api_key(&key_val) {
-                                Ok(()) => {
-                                    let masked = if key_val.len() > 8 {
-                                        format!("{}...{}", &key_val[..4], &key_val[key_val.len()-4..])
-                                    } else { "****".to_string() };
-                                    let provider = self.pending_provider.clone().unwrap_or_default();
-                                    self.messages.push(Message {
-                                        role: "system".to_string(),
-                                        content: format!(
-                                            "API key for {} saved to ~/.config/fusion/fusion.toml\nKey: {}\nRestart to apply.",
-                                            provider, masked
-                                        ),
-                                    });
-                                }
-                                Err(e) => {
-                                    self.messages.push(Message {
-                                        role: "system".to_string(),
-                                        content: format!("Failed to save key: {}", e),
-                                    });
-                                }
-                            }
-                        }
-                        self.close_autocomplete();
-                        return;
-                    }
-                    (_, KeyCode::Backspace) => {
-                        self.key_buffer.pop();
-                        return;
-                    }
-                    (_, KeyCode::Char(c)) => {
-                        self.key_buffer.push(c);
-                        return;
-                    }
-                    _ => { return; }
-                }
-            }
-
             const VISIBLE: usize = 8; // visible rows in popup
             match (key.modifiers, key.code) {
                 (_, KeyCode::Up) => {
@@ -1212,12 +1163,10 @@ impl App {
             }
             AutocompleteMode::Providers => {
                 if let Some(item) = self.autocomplete_items.get(selected_idx) {
-                    let provider = item.label.clone();
-                    self.open_key_input(provider);
+                    let provider = item.label.to_lowercase();
+                    self.input = format!("/key {} ", provider);
+                    self.close_autocomplete();
                 }
-            }
-            AutocompleteMode::KeyInput => {
-                // Handled entirely in the key event handler above
             }
         }
     }
@@ -1242,22 +1191,6 @@ impl App {
             },
         ];
         self.autocomplete_mode = AutocompleteMode::Providers;
-        self.autocomplete_selected = 0;
-        self.autocomplete_scroll = 0;
-        self.autocomplete_visible = true;
-    }
-
-    /// Open the key input overlay for a given provider.
-    fn open_key_input(&mut self, provider: String) {
-        self.pending_provider = Some(provider.clone());
-        self.key_buffer.clear();
-        // Show a single placeholder item that acts as the input prompt
-        self.autocomplete_items = vec![AutocompleteItem {
-            label: format!("Enter {} API key", provider),
-            description: "Press Enter to save · Esc to cancel".to_string(),
-            is_current: false,
-        }];
-        self.autocomplete_mode = AutocompleteMode::KeyInput;
         self.autocomplete_selected = 0;
         self.autocomplete_scroll = 0;
         self.autocomplete_visible = true;
@@ -1341,7 +1274,7 @@ impl App {
                 let q = self.at_query.clone();
                 self.show_file_picker(&q);
             }
-            AutocompleteMode::Providers | AutocompleteMode::KeyInput => {
+            AutocompleteMode::Providers => {
                 // Static lists — no filtering needed
             }
         }
@@ -1920,43 +1853,55 @@ impl App {
                 }
             }
             "/key" => {
-                if let Some(api_key) = parts.get(1) {
-                    let key = api_key.trim().to_string();
-                    if key.is_empty() {
+                let p1 = parts.get(1).map(|s| s.trim());
+                let p2 = parts.get(2).map(|s| s.trim().to_string());
+
+                let (provider_opt, key_val) = match (p1, p2) {
+                    (Some(p), Some(k)) if p.eq_ignore_ascii_case("cloudflare") || p.eq_ignore_ascii_case("xai") || p.eq_ignore_ascii_case("openai") => {
+                        (Some(p.to_lowercase()), k)
+                    }
+                    (Some(k), _) => {
+                        (None, k.to_string())
+                    }
+                    _ => {
                         self.messages.push(Message {
                             role: "system".to_string(),
-                            content: "Usage: /key <api-key-value>".to_string(),
+                            content: "Usage:\n  /key <api-key>\n  /key <provider> <api-key>\nProviders: cloudflare, xai, openai".to_string(),
                         });
-                    } else {
-                        match fusion_core::config::save_api_key(&key) {
-                            Ok(()) => {
-                                // Mask all but last 4 chars for display
-                                let masked = if key.len() > 8 {
-                                    format!("{}...{}", &key[..4], &key[key.len()-4..])
-                                } else {
-                                    "****".to_string()
-                                };
-                                self.messages.push(Message {
-                                    role: "system".to_string(),
-                                    content: format!(
-                                        "API key saved to ~/.config/fusion/fusion.toml\nKey: {}\nRestart fusion to apply the new key.",
-                                        masked
-                                    ),
-                                });
-                            }
-                            Err(e) => {
-                                self.messages.push(Message {
-                                    role: "system".to_string(),
-                                    content: format!("Failed to save API key: {}", e),
-                                });
-                            }
-                        }
+                        return;
                     }
-                } else {
+                };
+
+                if key_val.is_empty() {
                     self.messages.push(Message {
                         role: "system".to_string(),
-                        content: "Usage: /key <api-key-value>\nSaves your provider API key to ~/.config/fusion/fusion.toml".to_string(),
+                        content: "Usage:\n  /key <api-key>\n  /key <provider> <api-key>".to_string(),
                     });
+                } else {
+                    match fusion_core::config::save_api_key(provider_opt.as_deref(), &key_val) {
+                        Ok(()) => {
+                            // Mask all but first and last 4 chars for display
+                            let masked = if key_val.len() > 8 {
+                                format!("{}...{}", &key_val[..4], &key_val[key_val.len()-4..])
+                            } else {
+                                "****".to_string()
+                            };
+                            let prov_desc = provider_opt.unwrap_or_else(|| "detected provider".to_string());
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: format!(
+                                    "API key for {} saved to ~/.config/fusion/fusion.toml\nKey: {}\nRestart fusion to apply the new key.",
+                                    prov_desc, masked
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: format!("Failed to save API key: {}", e),
+                            });
+                        }
+                    }
                 }
             }
             "/image" => {
