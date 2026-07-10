@@ -1,9 +1,9 @@
 use fusion_core::config::Config;
 use fusion_core::error::FusionError;
 use fusion_llm::client::{ChatMessage, ChatOptions, create_llm_client, LlmClient};
-use std::time::Instant;
 
 use crate::tools::{ToolRegistry, build_tool_schemas};
+
 
 
 /// Events emitted by the agent for the TUI to render.
@@ -56,7 +56,7 @@ impl Agent {
             todos: Vec::new(),
             cwd,
             tool_registry,
-            arbitrage_mode: false,
+            arbitrage_mode: true,
         }
     }
 
@@ -614,7 +614,7 @@ impl Agent {
             let result = match small_llm.chat(options, None).await {
                 Ok(res) => res,
                 Err(e) => {
-                    if let Some(ref wt) = worktree_path {
+                    if worktree_path.is_some() {
                         let _ = std::process::Command::new("git")
                             .args(["worktree", "remove", "--force", &sub_cwd])
                             .current_dir(&main_cwd)
