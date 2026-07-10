@@ -332,12 +332,88 @@ struct ToolCallBuilder {
     arguments: String,
 }
 
+fn extract_local_image_paths(content: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut current = content;
+
+    while let Some(start_idx) = current.find("file://") {
+        let path_start = start_idx + 7; // skip "file://"
+        let mut path_end = path_start;
+        for c in current[path_start..].chars() {
+            if c == ')' || c == ']' || c == '\n' || c == '\r' || c == ' ' || c == '"' || c == '\'' {
+                break;
+            }
+            path_end += c.len_utf8();
+        }
+
+        if path_end > path_start {
+            let path = current[path_start..path_end].to_string();
+            let ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "gif" {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+        current = &current[path_end..];
+    }
+    paths
+}
+
 fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
+    use base64::Engine;
+
     let mut serialized = Vec::new();
     for msg in messages {
         let mut map = serde_json::Map::new();
         map.insert("role".to_string(), serde_json::json!(msg.role));
-        map.insert("content".to_string(), serde_json::json!(msg.content));
+
+        if msg.role == "user" {
+            let image_paths = extract_local_image_paths(&msg.content);
+            if !image_paths.is_empty() {
+                let mut content_parts = Vec::new();
+
+                // Add the text prompt part
+                content_parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": msg.content
+                }));
+
+                // Add each image part
+                for path_str in image_paths {
+                    let path = std::path::Path::new(&path_str);
+                    if path.exists() && path.is_file() {
+                        if let Ok(bytes) = std::fs::read(path) {
+                            let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+                            let media_type = match ext.as_str() {
+                                "jpg" | "jpeg" => "image/jpeg",
+                                "webp" => "image/webp",
+                                "gif" => "image/gif",
+                                _ => "image/png",
+                            };
+
+                            content_parts.push(serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{};base64,{}", media_type, base64_data)
+                                }
+                            }));
+                        }
+                    }
+                }
+
+                map.insert("content".to_string(), serde_json::Value::Array(content_parts));
+            } else {
+                map.insert("content".to_string(), serde_json::json!(msg.content));
+            }
+        } else {
+            map.insert("content".to_string(), serde_json::json!(msg.content));
+        }
 
         if let Some(ref name) = msg.name {
             map.insert("name".to_string(), serde_json::json!(name));
@@ -356,7 +432,7 @@ fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
 
                 let mut func_map = serde_json::Map::new();
                 func_map.insert("name".to_string(), serde_json::json!(tc.name));
-                
+
                 let args_str = if tc.arguments.is_string() {
                     tc.arguments.as_str().unwrap_or_default().to_string()
                 } else {
@@ -411,5 +487,28 @@ mod tests {
             Ok(res) => println!("Success: {:?}", res),
             Err(e) => println!("Error: {:?}", e),
         }
+    }
+    #[test]
+    fn test_multimodal_serialization() {
+        let temp_dir = std::env::temp_dir();
+        let img_path = temp_dir.join("test_vision_img.png");
+        let _ = std::fs::write(&img_path, b"fake_png_data");
+
+        let prompt = format!("Explain this: [image 1](file://{})", img_path.to_string_lossy());
+        let messages = vec![ChatMessage::user(prompt)];
+
+        let serialized = serialize_messages(&messages);
+        let content_arr = serialized[0]["content"].as_array().unwrap();
+
+        assert_eq!(content_arr.len(), 2);
+        assert_eq!(content_arr[0]["type"], "text");
+        assert!(content_arr[0]["text"].as_str().unwrap().contains("Explain this:"));
+
+        assert_eq!(content_arr[1]["type"], "image_url");
+        let url = content_arr[1]["image_url"]["url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert!(url.contains("ZmFrZV9wbmdfZGF0YQ==")); // base64 of "fake_png_data"
+
+        let _ = std::fs::remove_file(img_path);
     }
 }

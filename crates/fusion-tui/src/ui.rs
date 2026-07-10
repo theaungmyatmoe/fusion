@@ -769,26 +769,131 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border));
 
-    let input_line = Line::from(vec![
-        Span::styled(
-            "\u{276f} ",
-            Style::default()
-                .fg(theme.dim)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            app.input.clone(),
-            Style::default()
-                .fg(theme.label_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
+    let mut spans: Vec<Span> = Vec::new();
+    let mut visual_len: u16 = 0;
 
-    let input_widget = Paragraph::new(input_line).block(input_block);
+    // Prompt character
+    spans.push(Span::styled(
+        "\u{276f} ",
+        Style::default()
+            .fg(theme.dim)
+            .add_modifier(Modifier::BOLD),
+    ));
+    visual_len += 2;
+
+    // Chronological scanner to parse and style tags/text inside app.input
+    let text = if app.in_paste_burst {
+        "[Pasted (pasting...)]".to_string()
+    } else {
+        app.input.clone()
+    };
+
+    let mut remaining = text.as_str();
+    while !remaining.is_empty() {
+        if let Some(start_idx) = remaining.find('[') {
+            if start_idx > 0 {
+                let segment = &remaining[..start_idx];
+                spans.push(Span::styled(
+                    segment.to_string(),
+                    Style::default()
+                        .fg(theme.label_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                visual_len += segment.chars().count() as u16;
+            }
+
+            let mut end_idx = None;
+            for (idx, c) in remaining[start_idx..].char_indices() {
+                if c == ']' {
+                    end_idx = Some(start_idx + idx);
+                    break;
+                }
+            }
+
+            if let Some(end) = end_idx {
+                let token = &remaining[start_idx..=end];
+                let is_image = token.starts_with("[Image #");
+                let is_paste = token.starts_with("[Pasted: ");
+
+                if is_image || is_paste {
+                    let style = if is_image {
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::Rgb(59, 130, 246))
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD)
+                    };
+
+                    spans.push(Span::styled(token.to_string(), style));
+                    visual_len += token.chars().count() as u16;
+                } else {
+                    spans.push(Span::styled(
+                        token.to_string(),
+                        Style::default()
+                            .fg(theme.label_color)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    visual_len += token.chars().count() as u16;
+                }
+                remaining = &remaining[end + 1..];
+            } else {
+                spans.push(Span::styled(
+                    remaining[start_idx..].to_string(),
+                    Style::default()
+                        .fg(theme.label_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                visual_len += remaining[start_idx..].chars().count() as u16;
+                break;
+            }
+        } else {
+            spans.push(Span::styled(
+                remaining.to_string(),
+                Style::default()
+                    .fg(theme.label_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            visual_len += remaining.chars().count() as u16;
+            break;
+        }
+    }
+
+    let input_line = Line::from(spans.clone());
+    let total_chars: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let max_width = area.width.saturating_sub(2) as usize;
+
+    let (scrolled_line, cursor_col) = if total_chars <= max_width {
+        (input_line, visual_len)
+    } else {
+        let skip_chars = total_chars - max_width;
+        let mut skipped = 0;
+        let mut new_spans = Vec::new();
+
+        for span in spans {
+            let span_chars = span.content.chars().count();
+            if skipped + span_chars <= skip_chars {
+                skipped += span_chars;
+            } else if skipped < skip_chars {
+                let partial_skip = skip_chars - skipped;
+                let remaining_text: String = span.content.chars().skip(partial_skip).collect();
+                new_spans.push(Span::styled(remaining_text, span.style));
+                skipped = skip_chars;
+            } else {
+                new_spans.push(span);
+            }
+        }
+        (Line::from(new_spans), max_width as u16)
+    };
+
+    let input_widget = Paragraph::new(scrolled_line).block(input_block);
     frame.render_widget(input_widget, area);
 
     if !app.is_thinking {
-        let cursor_x = area.x + 1 + 2 + app.input.len() as u16;
+        let cursor_x = area.x + 1 + cursor_col;
         let cursor_y = area.y + 1;
         if cursor_x < area.x + area.width - 1 {
             frame.set_cursor_position((cursor_x, cursor_y));
@@ -910,7 +1015,11 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
             format!("  waiting for response... ({} queued)", app.queued_prompts.len())
         }
     } else {
-        "  Enter:send  |  /help:commands  |  Ctrl+C:quit".to_string()
+        if cfg!(target_os = "macos") {
+            "  Enter:send  |  /help:commands  |  Ctrl+C:quit  |  Cmd+V:image".to_string()
+        } else {
+            "  Enter:send  |  /help:commands  |  Ctrl+C:quit".to_string()
+        }
     };
 
     let total_width = area.width as usize;

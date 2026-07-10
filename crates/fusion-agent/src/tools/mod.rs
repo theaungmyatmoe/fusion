@@ -8,6 +8,7 @@ pub mod todo;
 pub mod search_web;
 pub mod fetch_url;
 pub mod glob;
+pub mod browser_debug;
 
 /// Tool registry — maps tool names to their execution logic.
 pub struct ToolRegistry {
@@ -40,6 +41,7 @@ impl ToolRegistry {
             "search_web" => search_web::execute(args).await,
             "fetch_url" => fetch_url::execute(args).await,
             "glob" => glob::execute(&self.cwd, args),
+            "browser_debug" => browser_debug::execute(args).await,
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -201,6 +203,32 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
                         "limit": { "type": "integer", "description": "Maximum file paths to return (default 100)" }
                     },
                     "required": ["pattern"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "browser_debug",
+                "description": "Optional browser DevTools debugging. Launch a headless Chrome/Chromium, navigate to localhost pages, inspect targets, and read console output via CDP. Only works with localhost URLs for safety. Use action 'start' first, then 'navigate', 'list_targets', 'console_logs', or 'stop'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["start", "navigate", "list_targets", "console_logs", "stop"],
+                            "description": "The browser debug action to perform"
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "URL to navigate to (localhost only). Required for 'navigate' action."
+                        },
+                        "port": {
+                            "type": "integer",
+                            "description": "CDP debugging port (default 9222)"
+                        }
+                    },
+                    "required": ["action"]
                 }
             }
         }),

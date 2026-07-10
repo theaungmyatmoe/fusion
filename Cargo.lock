@@ -536,6 +536,7 @@ version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-openai",
+ "base64",
  "fusion-core",
  "futures",
  "reqwest",

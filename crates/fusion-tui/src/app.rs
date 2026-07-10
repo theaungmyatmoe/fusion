@@ -119,6 +119,11 @@ pub struct App {
     pub last_key_time: Option<Instant>,
     pub in_paste_burst: bool,
     pub submitted_text: Option<String>,
+
+    /// Attached images (file paths) for the current prompt — shown as [Image #N] tags
+    pub attached_images: Vec<String>,
+    /// Collapsed multi-line paste blocks — shown as [Pasted: N lines] tags
+    pub pasted_blocks: Vec<String>,
     pub editor_requested: Option<String>,
 
     // Cache for TUI message lines to prevent typing delays: (wrap_width, messages_len, lines)
@@ -235,6 +240,8 @@ impl App {
             in_paste_burst: false,
             submitted_text: None,
             editor_requested: None,
+            attached_images: Vec::new(),
+            pasted_blocks: Vec::new(),
             message_cache: RefCell::new(None),
             queued_prompts: Vec::new(),
             grill_mode: false,
@@ -304,6 +311,8 @@ impl App {
             in_paste_burst: false,
             submitted_text: None,
             editor_requested: None,
+            attached_images: Vec::new(),
+            pasted_blocks: Vec::new(),
             message_cache: RefCell::new(None),
             queued_prompts: Vec::new(),
             grill_mode: false,
@@ -430,22 +439,134 @@ impl App {
         })
     }
 
+    /// Clear input + all attached tags (images, pasted blocks).
+    pub fn clear_input_state(&mut self) {
+        self.input.clear();
+        self.attached_images.clear();
+        self.pasted_blocks.clear();
+    }
+
+    /// Periodic tick handler — detects when a character-by-character paste burst ends and collapses it.
+    pub fn handle_tick(&mut self) {
+        self.tick_count = self.tick_count.wrapping_add(1);
+
+        if self.in_paste_burst {
+            if let Some(last_time) = self.last_key_time {
+                if Instant::now().duration_since(last_time) >= std::time::Duration::from_millis(50) {
+                    self.in_paste_burst = false;
+
+                    // Fetch from clipboard to get the original multiline text with newlines intact
+                    let text = if let Ok(clip_text) = crate::clipboard::get_clipboard_text() {
+                        clip_text
+                    } else {
+                        self.input.clone()
+                    };
+
+                    self.input.clear();
+
+                    let line_count = text.lines().count();
+                    let char_count = text.chars().count();
+                    if line_count > 3 || char_count > 80 {
+                        self.pasted_blocks.push(text);
+                        let token = if line_count == 1 {
+                            "[Pasted: 1 line] ".to_string()
+                        } else {
+                            format!("[Pasted: {} lines] ", line_count)
+                        };
+                        self.input.push_str(&token);
+                    } else {
+                        self.input = text.replace('\r', "").replace('\n', " ");
+                    }
+                    self.update_autocomplete();
+                }
+            }
+        }
+    }
+
+    /// Build the full prompt from tags + typed text for submission.
+    pub fn build_full_prompt(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        for block in &self.pasted_blocks {
+            parts.push(block.clone());
+        }
+
+        if !self.input.trim().is_empty() {
+            parts.push(self.input.trim().to_string());
+        }
+
+        for (i, path) in self.attached_images.iter().enumerate() {
+            parts.push(format!("[image {}](file://{})", i + 1, path));
+        }
+
+        parts.join("\n\n")
+    }
+
+    /// Build the visual display prompt from tags + typed text for the TUI transcript.
+    pub fn build_display_prompt(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        for block in &self.pasted_blocks {
+            let line_count = block.lines().count();
+            if line_count == 1 {
+                parts.push("[Pasted: 1 line]".to_string());
+            } else {
+                parts.push(format!("[Pasted: {} lines]", line_count));
+            }
+        }
+
+        if !self.input.trim().is_empty() {
+            parts.push(self.input.trim().to_string());
+        }
+
+        for (i, _path) in self.attached_images.iter().enumerate() {
+            parts.push(format!("[Image #{}]", i + 1));
+        }
+
+        parts.join(" ")
+    }
+
     pub fn handle_paste(&mut self, text: String) {
-        if let Some(path) = try_parse_image_path(&text) {
-            let filename = path.file_name().unwrap_or_default().to_string_lossy();
-            self.messages.push(Message {
-                role: "system".to_string(),
-                content: format!("Detected image path: ./{} (attached).", filename),
+        if let Some(_path) = try_parse_image_path(&text) {
+            let img_id = self.attached_images.len() + 1;
+            let pending_tag = format!("PENDING:{}", img_id);
+            self.attached_images.push(pending_tag);
+
+            let token = format!("[Image #{}] ", img_id);
+            self.input.push_str(&token);
+
+            let cwd = self.session.cwd.clone();
+            let tx = self.event_tx.clone();
+
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::clipboard::save_clipboard_image(&cwd)
+                })
+                .await
+                .unwrap_or_else(|_| Err("Background thread panic".to_string()));
+
+                let _ = tx.send(AppEvent::ImageAttached(result));
             });
-            let link = format!(" [image](file://{})", path.to_string_lossy());
-            self.input.push_str(&link);
-            self.update_autocomplete();
             return;
         }
 
-        let cleaned = text.replace('\r', "").replace('\n', " ");
-        let truncated: String = cleaned.chars().take(2000).collect();
-        self.input.push_str(&truncated);
+        let line_count = text.lines().count();
+        let char_count = text.chars().count();
+        if line_count > 3 || char_count > 80 {
+            // Collapse multi-line or long paste into a tag
+            self.pasted_blocks.push(text);
+            let token = if line_count == 1 {
+                "[Pasted: 1 line] ".to_string()
+            } else {
+                format!("[Pasted: {} lines] ", line_count)
+            };
+            self.input.push_str(&token);
+        } else {
+            // Short paste — inline into input
+            let cleaned = text.replace('\r', "").replace('\n', " ");
+            let truncated: String = cleaned.chars().take(2000).collect();
+            self.input.push_str(&truncated);
+        }
         self.update_autocomplete();
     }
 
@@ -504,10 +625,15 @@ impl App {
                 self.should_quit = true;
                 return;
             } else if key.code == KeyCode::Enter {
-                let text = self.input.trim().to_string();
-                if !text.is_empty() {
-                    self.queued_prompts.push(text);
-                    self.input.clear();
+                if self.in_paste_burst || is_paste_like {
+                    self.input.push('\n');
+                    self.update_autocomplete();
+                    return;
+                }
+                let full_prompt = self.build_full_prompt();
+                if !full_prompt.is_empty() {
+                    self.queued_prompts.push(full_prompt);
+                    self.clear_input_state();
                     self.messages.push(Message {
                         role: "system".to_string(),
                         content: format!("Prompt queued (#{}).", self.queued_prompts.len()),
@@ -517,7 +643,7 @@ impl App {
             }
         }
 
-        let mut grill_action = None;
+        let mut grill_action: Option<(String, Option<String>)> = None;
         if let Some(ref mut gq) = self.active_grill_question {
             match (key.modifiers, key.code) {
                 (_, KeyCode::Up) => {
@@ -535,14 +661,14 @@ impl App {
                     return;
                 }
                 (_, KeyCode::Esc) => {
-                    grill_action = Some(None);
+                    grill_action = Some((String::new(), None));
                 }
                 (_, KeyCode::Enter) => {
                     if self.input.is_empty() {
                         let opt_count = gq.options.len();
                         if opt_count > 1 && gq.selected == opt_count - 1 {
                             // Skip selected: clear question dialog with no action
-                            grill_action = Some(None);
+                            grill_action = Some((String::new(), None));
                         } else if opt_count > 0 && gq.selected == opt_count - 2 {
                             // Custom write-in selected: require typing first
                             self.messages.push(Message {
@@ -552,22 +678,23 @@ impl App {
                             return;
                         } else if opt_count > 0 {
                             let choice = gq.options[gq.selected].clone();
-                            grill_action = Some(Some(format!("Selected Option: {}", choice)));
+                            grill_action = Some((format!("Selected Option: {}", choice), None));
                         }
                     } else {
-                        let text = self.input.clone();
-                        self.input.clear();
-                        grill_action = Some(Some(text));
+                        let text = self.build_full_prompt();
+                        let display = self.build_display_prompt();
+                        self.clear_input_state();
+                        grill_action = Some((text, Some(display)));
                     }
                 }
                 _ => {}
             }
         }
 
-        if let Some(action) = grill_action {
+        if let Some((prompt, display)) = grill_action {
             self.active_grill_question = None;
-            if let Some(prompt) = action {
-                self.handle_submit(prompt);
+            if !prompt.is_empty() {
+                self.handle_submit(prompt, display);
             }
             return;
         }
@@ -605,24 +732,56 @@ impl App {
                 self.save_session();
                 self.should_quit = true;
             }
-            (KeyModifiers::CONTROL, KeyCode::Char('v')) => {
-                let cwd = self.session.cwd.clone();
-                match crate::clipboard::save_clipboard_image(&cwd) {
-                    Ok(path) => {
-                        let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                        self.messages.push(Message {
-                            role: "system".to_string(),
-                            content: format!("Saved clipboard image to ./{} and appended link.", filename),
-                        });
-                        let link = format!(" [image](file://{})", path.to_string_lossy());
-                        self.input.push_str(&link);
-                    }
-                    Err(_) => {
-                        if let Ok(text) = crate::clipboard::get_clipboard_text() {
-                            self.handle_paste(text);
-                        }
+            (KeyModifiers::CONTROL, KeyCode::Char('v')) | (KeyModifiers::SUPER, KeyCode::Char('v')) => {
+                // 1. Try reading clipboard text first (lightning fast!)
+                if let Ok(text) = crate::clipboard::get_clipboard_text() {
+                    if !text.trim().is_empty() {
+                        self.handle_paste(text);
+                        return;
                     }
                 }
+
+                // 2. Clipboard is empty or contains an image. Extract it in the background!
+                let img_id = self.attached_images.len() + 1;
+                let pending_tag = format!("PENDING:{}", img_id);
+                self.attached_images.push(pending_tag);
+
+                let token = format!("[Image #{}] ", img_id);
+                self.input.push_str(&token);
+
+                let cwd = self.session.cwd.clone();
+                let tx = self.event_tx.clone();
+
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::clipboard::save_clipboard_image(&cwd)
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("Background thread panic".to_string()));
+
+                    let _ = tx.send(AppEvent::ImageAttached(result));
+                });
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
+                let img_id = self.attached_images.len() + 1;
+                let pending_tag = format!("PENDING:{}", img_id);
+                self.attached_images.push(pending_tag);
+
+                let token = format!("[Image #{}] ", img_id);
+                self.input.push_str(&token);
+
+                let cwd = self.session.cwd.clone();
+                let tx = self.event_tx.clone();
+
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::clipboard::save_clipboard_image(&cwd)
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("Background thread panic".to_string()));
+
+                    let _ = tx.send(AppEvent::ImageAttached(result));
+                });
             }
             (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
                 self.editor_requested = Some(self.input.clone());
@@ -662,25 +821,20 @@ impl App {
             }
             (_, KeyCode::Enter) => {
                 if self.in_paste_burst || is_paste_like {
-                    // Suppress submission during paste bursts. Replace with a space.
-                    self.input.push(' ');
+                    // During paste bursts, collect newlines to collapse later
+                    self.input.push('\n');
                     self.update_autocomplete();
                     return;
                 }
                 self.close_autocomplete();
                 let text = self.input.trim().to_string();
-                if !text.is_empty() {
+                let has_tags = !self.pasted_blocks.is_empty() || !self.attached_images.is_empty();
+                if !text.is_empty() || has_tags {
                     if text == "/image" || text.starts_with("/image ") {
                         let cwd = self.session.cwd.clone();
                         match crate::clipboard::save_clipboard_image(&cwd) {
                             Ok(path) => {
-                                let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                                self.messages.push(Message {
-                                    role: "system".to_string(),
-                                    content: format!("Saved clipboard image to ./{} and appended link.", filename),
-                                });
-                                let link = format!(" [image](file://{})", path.to_string_lossy());
-                                self.input.push_str(&link);
+                                self.attached_images.push(path.to_string_lossy().to_string());
                             }
                             Err(e) => {
                                 self.messages.push(Message {
@@ -689,10 +843,20 @@ impl App {
                                 });
                             }
                         }
-                    } else {
                         self.input.clear();
+                    } else {
+                        if self.attached_images.iter().any(|s| s.starts_with("PENDING:")) {
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: "⏳ Please wait for clipboard image to finish saving before submitting.".to_string(),
+                            });
+                            return;
+                        }
+                        let full_prompt = self.build_full_prompt();
+                        let display_prompt = self.build_display_prompt();
+                        self.clear_input_state();
                         self.auto_scroll.set(true);
-                        self.handle_submit(text);
+                        self.handle_submit(full_prompt, Some(display_prompt));
                     }
                 }
             }
@@ -701,7 +865,39 @@ impl App {
                 self.update_autocomplete();
             }
             (_, KeyCode::Backspace) => {
-                self.input.pop();
+                if !self.input.is_empty() {
+                    let trimmed = self.input.trim_end();
+                    let mut matched_token_len = None;
+                    let mut is_image_token = false;
+                    let mut is_paste_token = false;
+
+                    if trimmed.ends_with(']') {
+                        if let Some(start_idx) = trimmed.rfind('[') {
+                            let token = &trimmed[start_idx..];
+                            if token.starts_with("[Image #") {
+                                is_image_token = true;
+                                let spaces_count = self.input.len() - trimmed.len();
+                                matched_token_len = Some(token.len() + spaces_count);
+                            } else if token.starts_with("[Pasted: ") {
+                                is_paste_token = true;
+                                let spaces_count = self.input.len() - trimmed.len();
+                                matched_token_len = Some(token.len() + spaces_count);
+                            }
+                        }
+                    }
+
+                    if let Some(len) = matched_token_len {
+                        let new_len = self.input.len() - len;
+                        self.input.truncate(new_len);
+                        if is_image_token {
+                            self.attached_images.pop();
+                        } else if is_paste_token {
+                            self.pasted_blocks.pop();
+                        }
+                    } else {
+                        self.input.pop();
+                    }
+                }
                 // Navigate back through stages on backspace
                 if self.autocomplete_mode == AutocompleteMode::Effort {
                     // Go back to model picker
@@ -753,7 +949,7 @@ impl App {
                         // Execute the command directly
                         self.input.clear();
                         self.close_autocomplete();
-                        self.handle_submit(label);
+                        self.handle_submit(label, None);
                     }
                 }
             }
@@ -774,12 +970,12 @@ impl App {
                             // No levels — apply immediately
                             self.input.clear();
                             self.close_autocomplete();
-                            self.handle_submit(format!("/model {}", info.shorthand));
+                            self.handle_submit(format!("/model {}", info.shorthand), None);
                         }
                     } else {
                         self.input.clear();
                         self.close_autocomplete();
-                        self.handle_submit(format!("/model {}", model_label));
+                        self.handle_submit(format!("/model {}", model_label), None);
                     }
                 }
             }
@@ -791,7 +987,7 @@ impl App {
                     self.close_autocomplete();
 
                     // Apply model
-                    self.handle_submit(format!("/model {}", model_name));
+                    self.handle_submit(format!("/model {}", model_name), None);
 
                     // Apply effort level
                     let level = match level_label.as_str() {
@@ -799,7 +995,7 @@ impl App {
                         "high" => "/high",
                         _ => "/normal",
                     };
-                    self.handle_submit(level.to_string());
+                    self.handle_submit(level.to_string(), None);
                 }
             }
         }
@@ -917,7 +1113,7 @@ impl App {
             .unwrap_or(0);
     }
 
-    fn handle_submit(&mut self, text: String) {
+    fn handle_submit(&mut self, text: String, display_text: Option<String>) {
         if text == "/edit" || text.starts_with("/edit ") {
             let seed = if text.starts_with("/edit ") {
                 text.strip_prefix("/edit ").unwrap_or("").to_string()
@@ -935,9 +1131,10 @@ impl App {
 
         self.submitted_text = Some(text.clone());
 
+        let display = display_text.unwrap_or_else(|| text.clone());
         self.messages.push(Message {
             role: "user".to_string(),
-            content: text.clone(),
+            content: display,
         });
 
         self.session.push_message("user", &text);
@@ -1112,7 +1309,7 @@ impl App {
                 // Process the next queued prompt if any (only if a grill modal is not active!)
                 if self.active_grill_question.is_none() && !self.queued_prompts.is_empty() {
                     let next_prompt = self.queued_prompts.remove(0);
-                    self.handle_submit(next_prompt);
+                    self.handle_submit(next_prompt, None);
                 }
             }
             AgentEvent::TodoUpdate(todos) => {
@@ -1385,6 +1582,20 @@ impl App {
                     });
                 }
             }
+            "/image" => {
+                let cwd = self.session.cwd.clone();
+                match crate::clipboard::save_clipboard_image(&cwd) {
+                    Ok(path) => {
+                        self.attached_images.push(path.to_string_lossy().to_string());
+                    }
+                    Err(e) => {
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: format!("Error saving image: {}", e),
+                        });
+                    }
+                }
+            }
             "/grill" | "/grill-me" => {
                 self.grill_mode = !self.grill_mode;
                 let status = if self.grill_mode {
@@ -1562,12 +1773,39 @@ pub async fn run_tui_with_session(
                 AppEvent::Agent(agent_event) => app.handle_agent_event(agent_event),
                 AppEvent::Resize(_, _) => {}
                 AppEvent::Paste(text) => {
-                    if !app.is_thinking {
+                    if let Ok(clip_text) = crate::clipboard::get_clipboard_text() {
+                        app.handle_paste(clip_text);
+                    } else {
                         app.handle_paste(text);
                     }
                 }
+                AppEvent::ImageAttached(result) => {
+                    match result {
+                        Ok(path) => {
+                            if let Some(pos) = app.attached_images.iter().position(|s| s.starts_with("PENDING:")) {
+                                app.attached_images[pos] = path.to_string_lossy().to_string();
+                            } else {
+                                app.attached_images.push(path.to_string_lossy().to_string());
+                            }
+                        }
+                        Err(e) => {
+                            // Remove the pending tag since saving failed
+                            if let Some(pos) = app.attached_images.iter().position(|s| s.starts_with("PENDING:")) {
+                                app.attached_images.remove(pos);
+                                // Also remove the corresponding [Image #id] token from the input to keep it clean
+                                let img_id = pos + 1;
+                                let token = format!("[Image #{}]", img_id);
+                                app.input = app.input.replace(&token, "");
+                            }
+                            app.messages.push(Message {
+                                role: "system".to_string(),
+                                content: format!("Error saving image: {}", e),
+                            });
+                        }
+                    }
+                }
                 AppEvent::Tick => {
-                    app.tick_count = app.tick_count.wrapping_add(1);
+                    app.handle_tick();
                 }
             }
         }
@@ -1694,9 +1932,21 @@ fn try_parse_image_path(text: &str) -> Option<std::path::PathBuf> {
         .or_else(|| trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
         .unwrap_or(trimmed);
 
-    // Also support file:// URL
-    let path_str = if unquoted.starts_with("file://") {
-        unquoted.strip_prefix("file://").unwrap_or(unquoted)
+    // Extract path from a markdown link containing `file://` or just a raw `file://` URL
+    let path_str = if let Some(start_idx) = unquoted.find("file://") {
+        let path_start = start_idx + 7; // skip "file://"
+        let mut path_end = path_start;
+        for c in unquoted[path_start..].chars() {
+            if c == ')' || c == ']' || c == '\n' || c == '\r' || c == ' ' || c == '"' || c == '\'' {
+                break;
+            }
+            path_end += c.len_utf8();
+        }
+        if path_end > path_start {
+            &unquoted[path_start..path_end]
+        } else {
+            unquoted
+        }
     } else {
         unquoted
     };
@@ -1755,6 +2005,12 @@ mod tests {
         assert!(parsed_url.is_some());
         assert_eq!(parsed_url.unwrap(), img_path);
 
+        // Test Markdown image format
+        let markdown_format = format!("[image 1](file://{})", img_path.to_string_lossy());
+        let parsed_markdown = try_parse_image_path(&markdown_format);
+        assert!(parsed_markdown.is_some());
+        assert_eq!(parsed_markdown.unwrap(), img_path);
+
         // Cleanup
         let _ = std::fs::remove_file(img_path);
         let _ = std::fs::remove_file(txt_path);
@@ -1793,6 +2049,7 @@ mod tests {
 
         // Queue a second prompt
         app.input = "second prompt".to_string();
+        app.last_key_time = None;
         app.handle_key(enter_key);
         assert_eq!(app.queued_prompts.len(), 2);
 
@@ -1804,6 +2061,60 @@ mod tests {
         // Test /dq (clear all remaining)
         app.handle_slash("/dq");
         assert!(app.queued_prompts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_smart_paste_and_image_tags() {
+        let config = Config {
+            model: "test-model".to_string(),
+            small_model: None,
+            yolo: false,
+            provider: fusion_core::config::Provider::Auto,
+            cloudflare_account_id: None,
+            api_key: String::new(),
+            base_url: String::new(),
+            config_path: None,
+            settings: std::collections::HashMap::new(),
+        };
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, event_tx);
+
+        // Test normal short paste
+        app.handle_paste("short text".to_string());
+        assert_eq!(app.input, "short text");
+        assert!(app.pasted_blocks.is_empty());
+        assert!(app.attached_images.is_empty());
+
+        app.clear_input_state();
+
+        // Test multi-line paste (> 3 lines)
+        let multiline = "line 1\nline 2\nline 3\nline 4".to_string();
+        app.handle_paste(multiline.clone());
+        assert_eq!(app.input, "[Pasted: 4 lines] ");
+        assert_eq!(app.pasted_blocks.len(), 1);
+        assert_eq!(app.pasted_blocks[0], multiline);
+
+        // Add some image path
+        let temp_dir = std::env::temp_dir();
+        let img_path = temp_dir.join("test_img.png");
+        let _ = File::create(&img_path);
+        app.handle_paste(img_path.to_string_lossy().to_string());
+        assert_eq!(app.attached_images.len(), 1);
+        assert_eq!(app.attached_images[0], format!("PENDING:{}", 1));
+        assert!(app.input.contains("[Image #1]"));
+
+        // Backspace deletes characters from the input text (which contains the tags)
+        let before_len = app.input.len();
+        let bs_key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Backspace,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        app.handle_key(bs_key);
+        assert_eq!(app.input.len(), before_len - 11);
+        assert_eq!(app.input, "[Pasted: 4 lines] ");
+        assert!(app.attached_images.is_empty());
+
+        let _ = std::fs::remove_file(img_path);
     }
 
     #[test]

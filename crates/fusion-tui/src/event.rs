@@ -17,6 +17,8 @@ pub enum AppEvent {
     Agent(fusion_agent::agent::AgentEvent),
     /// Bracketed paste from user.
     Paste(String),
+    /// Image was saved/extracted from clipboard asynchronously.
+    ImageAttached(Result<std::path::PathBuf, String>),
 }
 
 /// Async event handler — polls crossterm events and agent channel.
