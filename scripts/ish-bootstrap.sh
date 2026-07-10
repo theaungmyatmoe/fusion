@@ -7,9 +7,9 @@ echo "==> Fusion for iOS (iSH Alpine Linux bootstrap)"
 echo
 
 # 1. Install prerequisites inside Alpine
-echo "--> Installing dependencies (curl, git, ripgrep)..."
+echo "--> Installing dependencies (curl, git, ripgrep, ca-certificates)..."
 apk update
-apk add curl git ripgrep
+apk add curl git ripgrep ca-certificates
 
 echo
 echo "--> Running Fusion installer..."
