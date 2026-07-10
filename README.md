@@ -78,6 +78,7 @@ fusion --simple           # Launch lightweight scrollback REPL
 fusion -p "your task"     # Execute task headless
 fusion --model grok-3     # Override model
 fusion --yolo             # Auto-approve all shell executions
+fusion --upgrade          # Self-upgrade Fusion to the latest version
 ```
 
 ### Chat Commands

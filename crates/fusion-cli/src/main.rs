@@ -1,5 +1,5 @@
 use clap::Parser;
-use fusion_core::config::{is_termux, load_config};
+use fusion_core::config::{is_ish, is_termux, load_config};
 use fusion_core::session::Session;
 use std::io::Write;
 use std::path::PathBuf;
@@ -16,6 +16,10 @@ struct Cli {
     /// Force the simple mobile-friendly terminal REPL
     #[arg(long)]
     simple: bool,
+
+    /// Upgrade Fusion to the latest release version
+    #[arg(long)]
+    upgrade: bool,
 
     /// Override model (e.g. grok-3, @cf/zhipu-ai/glm-4)
     #[arg(long, short = 'm')]
@@ -108,6 +112,14 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     let cli = Cli::parse();
+
+    if cli.upgrade {
+        if let Err(e) = run_upgrade().await {
+            eprintln!("\x1b[31mUpgrade failed:\x1b[0m {}", e);
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     // Change working directory if specified
     if let Some(ref cwd) = cli.cwd {
@@ -265,10 +277,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Interactive mode
     let termux = is_termux();
-    let use_simple = cli.simple || (termux && !cli.tui);
+    let ish = is_ish();
+    let use_simple = cli.simple || (termux && !cli.tui) || (ish && !cli.tui);
 
     if use_simple {
-        if termux {
+        if ish {
+            println!("fusion — iSH (iOS) emulator detected. Defaulting to lightweight REPL.");
+        } else if termux {
             println!("fusion — Termux detected. Using lightweight REPL.");
         }
         fusion_tui::simple::run_simple(&config).await?;
@@ -297,4 +312,128 @@ fn format_age(epoch_secs: u64) -> String {
     } else {
         format!("{}d ago", diff / 86400)
     }
+}
+
+async fn run_upgrade() -> anyhow::Result<()> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    println!("Current version: v{}", current_version);
+    println!("Checking for latest release on GitHub...");
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.github.com/repos/theaungmyatmoe/fusion/releases/latest")
+        .header("User-Agent", "fusion-upgrade")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("Failed to fetch latest release: {}", response.status());
+    }
+
+    let release: serde_json::Value = response.json().await?;
+    let latest_version = release["tag_name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("tag_name not found in release payload"))?
+        .trim_start_matches('v')
+        .to_string();
+
+    println!("Latest version:  v{}", latest_version);
+
+    if latest_version == current_version {
+        println!("You are already running the latest version of Fusion.");
+        return Ok(());
+    }
+
+    // Determine target platform
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "android") || fusion_core::config::is_termux() {
+        "termux"
+    } else if fusion_core::config::is_ish() {
+        "alpine"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        anyhow::bail!("Self-upgrade is not supported on this platform.");
+    };
+
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "x86") {
+        "i686"
+    } else {
+        anyhow::bail!("Self-upgrade is not supported on this architecture.");
+    };
+
+    let target = match os {
+        "termux" => format!("{}-linux-android", arch),
+        "alpine" => "i686-unknown-linux-musl".to_string(), // iSH is always 32-bit x86 musl
+        "linux" => format!("{}-unknown-linux-musl", arch),
+        "macos" => format!("{}-apple-darwin", arch),
+        _ => anyhow::bail!("Unsupported platform"),
+    };
+
+    let asset_name = format!("fusion-{}", target);
+    println!("Looking for asset: {}", asset_name);
+
+    let assets = release["assets"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("No assets found in release payload"))?;
+
+    let asset = assets
+        .iter()
+        .find(|a| a["name"].as_str().map(|n| n == asset_name).unwrap_or(false))
+        .ok_or_else(|| anyhow::anyhow!("No release asset found for target {}", target))?;
+
+    let download_url = asset["browser_download_url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("browser_download_url not found in asset payload"))?;
+
+    println!("Downloading new binary...");
+    let bytes = client
+        .get(download_url)
+        .header("User-Agent", "fusion-upgrade")
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    let current_exe = std::env::current_exe()?;
+    let exe_dir = current_exe.parent().ok_or_else(|| anyhow::anyhow!("Cannot find executable directory"))?;
+    let temp_path = exe_dir.join("fusion.tmp");
+
+    println!("Writing new binary to {}...", temp_path.display());
+    std::fs::write(&temp_path, &bytes)?;
+
+    // Swap the running binary
+    let backup_path = exe_dir.join("fusion.old");
+    if current_exe.exists() {
+        // Rename the old running binary first (Unix allows renaming a running executable)
+        std::fs::rename(&current_exe, &backup_path)?;
+    }
+
+    if let Err(e) = std::fs::rename(&temp_path, &current_exe) {
+        // Rollback on failure
+        if backup_path.exists() {
+            let _ = std::fs::rename(&backup_path, &current_exe);
+        }
+        anyhow::bail!("Failed to swap binaries: {}", e);
+    }
+
+    // Set execute permissions on Unix systems
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&current_exe)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&current_exe, perms)?;
+    }
+
+    // Clean up backup file
+    let _ = std::fs::remove_file(backup_path);
+
+    println!("Upgrade successful! Fusion has been upgraded to v{}.", latest_version);
+    Ok(())
 }

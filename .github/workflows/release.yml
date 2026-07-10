@@ -67,15 +67,17 @@ jobs:
       - name: Package binary
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.binary }}-${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.binary }}
           cd dist
           tar czf ${{ matrix.binary }}-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
+          rm ${{ matrix.binary }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}-${{ matrix.target }}
-          path: dist/${{ matrix.binary }}-${{ matrix.target }}.tar.gz
+          path: dist/*
 
   release:
     needs: build
@@ -91,5 +93,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.tar.gz
+          files: artifacts/**/*
           generate_release_notes: true

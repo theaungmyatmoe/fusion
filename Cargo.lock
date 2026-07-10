@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "fusion-agent"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "fusion-core",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "fusion-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -513,12 +513,14 @@ dependencies = [
  "fusion-core",
  "fusion-llm",
  "fusion-tui",
+ "reqwest",
+ "serde_json",
  "tokio",
 ]
 
 [[package]]
 name = "fusion-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "dirs",
@@ -530,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "fusion-llm"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -547,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "fusion-tui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "crossterm",
