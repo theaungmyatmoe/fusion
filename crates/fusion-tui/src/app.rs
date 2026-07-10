@@ -283,17 +283,15 @@ impl App {
         } else {
             false
         };
-        self.last_key_time = Some(now);
 
         if is_paste_like {
             self.in_paste_burst = true;
         } else {
-            if let Some(last_time) = self.last_key_time {
-                if now.duration_since(last_time) > std::time::Duration::from_millis(100) {
-                    self.in_paste_burst = false;
-                }
-            }
+            // Only reset if enough time has passed since last key
+            self.in_paste_burst = false;
         }
+
+        self.last_key_time = Some(now);
 
         if self.is_thinking {
             if key.code == KeyCode::Esc {
@@ -310,11 +308,15 @@ impl App {
                     self.input = text;
                 }
                 self.save_session();
+                return;
             } else if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
                 self.save_session();
                 self.should_quit = true;
+                return;
+            } else if key.code == KeyCode::Enter {
+                // Ignore Enter submission key while the agent is running/thinking
+                return;
             }
-            return;
         }
 
         if self.autocomplete_visible {
@@ -804,11 +806,9 @@ impl App {
                 });
 
                 let mut updated = false;
-                if let Some(last) = self.messages.last_mut() {
-                    if last.role == "assistant" {
-                        last.content = text.clone();
-                        updated = true;
-                    }
+                if let Some(last_assistant) = self.messages.iter_mut().rev().find(|m| m.role == "assistant") {
+                    last_assistant.content = text.clone();
+                    updated = true;
                 }
                 if !updated {
                     self.messages.push(Message {

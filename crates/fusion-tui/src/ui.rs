@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, AppMode, AutocompleteMode};
+use crate::app::{App, AppMode};
 use serde_json;
 
 // ── Theme Struct for Light & Dark Modes ─────────────────────────────────────
@@ -45,12 +45,12 @@ impl Theme {
                 user_bg: Color::Rgb(26, 26, 26),            // #1a1a1a (backgroundElement)
                 user_fg: Color::Rgb(224, 224, 224),         // #e0e0e0
                 autocomplete_bg: Color::Rgb(17, 17, 17),     // #111111 (backgroundPanel)
-                code_fg: Color::Rgb(106, 191, 106),         // #6abf6a (grok green)
-                code_bg: Color::Rgb(20, 20, 20),           // #141414
-                code_block_fg: Color::Rgb(192, 192, 192),
-                header_color: Color::Rgb(92, 156, 245),     // #5c9cf5 (grok blue)
-                bold_color: Color::Rgb(232, 164, 101),       // #e8a465 (grok orange/brown)
-                italic_color: Color::Rgb(229, 192, 123),     // #e5c07b (grok yellow)
+                code_fg: Color::Rgb(229, 229, 229),         // #e5e5e5 (light text on dark bg)
+                code_bg: Color::Rgb(42, 42, 42),            // #2a2a2a (subtle dark bg)
+                code_block_fg: Color::Rgb(106, 191, 106),   // #6abf6a (green for code blocks)
+                header_color: Color::Rgb(0, 171, 142),      // #00AB8E (teal-green like Grok)
+                bold_color: Color::Rgb(224, 224, 224),       // #e0e0e0 (same as label — bold weight only)
+                italic_color: Color::Rgb(180, 180, 180),    // #b4b4b4 (subtle dim)
                 bullet_color: Color::DarkGray,
             }
         } else {
@@ -65,12 +65,12 @@ impl Theme {
                 user_bg: Color::Rgb(240, 240, 240),         // #f0f0f0 (subtle light background for user box)
                 user_fg: Color::Rgb(30, 30, 30),
                 autocomplete_bg: Color::Rgb(248, 248, 248), // #f8f8f8
-                code_fg: Color::Rgb(40, 120, 40),          // #287828 (darker green for light theme code)
-                code_bg: Color::Rgb(240, 240, 240),
-                code_block_fg: Color::Rgb(60, 60, 60),
-                header_color: Color::Rgb(26, 115, 232),     // #1a73e8 (standard light link blue)
-                bold_color: Color::Rgb(190, 90, 10),        // #be5a0a (warm brown-orange)
-                italic_color: Color::Rgb(150, 110, 10),     // #966e0a (olive)
+                code_fg: Color::Rgb(0, 115, 153),           // #007399 (teal-blue for inline code/links)
+                code_bg: Color::Rgb(229, 229, 229),        // #e5e5e5 (subtle gray bg pill)
+                code_block_fg: Color::Rgb(40, 40, 40),      // #282828 (standard dark text for code blocks/outputs)
+                header_color: Color::Rgb(0, 86, 179),       // #0056B3 (gorgeous deep blue like Grok)
+                bold_color: Color::Rgb(30, 30, 30),         // #1e1e1e (same as label — bold weight only)
+                italic_color: Color::Rgb(80, 80, 80),       // #505050 (subtle dim)
                 bullet_color: Color::Rgb(120, 120, 120),
             }
         }
@@ -110,27 +110,45 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+fn get_git_branch() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn current_branch() -> String {
+    get_git_branch().unwrap_or_else(|| "main".to_string())
+}
+
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let thinking = if app.is_thinking { " thinking..." } else { "" };
+    let total_chars: usize = app.messages.iter().map(|m| m.content.len()).sum();
+    let estimated_tokens = (total_chars / 4) as u32;
+    let context_limit = fusion_core::models::lookup_model(&app.model)
+        .map(|m| m.context_window)
+        .unwrap_or(131_072);
 
-    let model_display = fusion_core::models::lookup_model(&app.model)
-        .map(|m| m.display_name.to_string())
-        .unwrap_or_else(|| {
-            if app.model.len() > 30 {
-                format!("...{}", &app.model[app.model.len() - 25..])
-            } else {
-                app.model.clone()
-            }
-        });
-
-    let level_str = if app.token_level != fusion_core::models::TokenLevel::Normal {
-        format!(" ({})", app.token_level)
+    let token_used_str = if estimated_tokens >= 1000 {
+        format!("{}K", estimated_tokens / 1000)
     } else {
-        String::new()
+        format!("{}", estimated_tokens)
+    };
+    
+    let token_limit_str = if context_limit >= 1000 {
+        format!("{}K", context_limit / 1000)
+    } else {
+        format!("{}", context_limit)
     };
 
-    let left = format!("\u{276f} main ~/{}", short_cwd());
-    let right = format!("{}{}{}", model_display, level_str, thinking);
+    let left = format!("\u{2387} {} ~/{}", current_branch(), short_cwd());
+    let right = format!("{} / {}", token_used_str, token_limit_str);
 
     let total_width = area.width as usize;
     let padding = total_width.saturating_sub(left.len() + right.len() + 2);
@@ -148,54 +166,85 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     frame.render_widget(bar, area);
 }
 
-fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, theme: Theme) {
+fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, theme: Theme) {
     let mut lines: Vec<Line> = Vec::new();
-    let width = full_width as usize;
+    let wrap_width = (area.width as usize).saturating_sub(2);
+    let width = wrap_width;
+    let mut is_first = true;
+    let mut prev_role = "";
 
-    for msg in &app.messages {
+    for (msg_idx, msg) in app.messages.iter().enumerate() {
+        if !is_first {
+            let is_tool_transition = prev_role == "tool" && msg.role == "tool_result";
+            if !is_tool_transition {
+                lines.push(Line::from("")); // Single empty line separator between blocks
+            }
+        }
+        is_first = false;
+        prev_role = msg.role.as_str();
+
         match msg.role.as_str() {
             "user" => {
-                lines.push(Line::from(""));
-                // Grok-style box: no left vertical line, just background highlight with chevron
-                let prefix = " \u{276f} "; // " ❯ " (chevron)
-                let content = &msg.content;
-                let text_len = prefix.len() + content.len();
-                let trail = if width > text_len {
-                    " ".repeat(width - text_len)
-                } else {
-                    String::new()
+                lines.push(Line::from("")); // Space above the block
+                
+                let border_color = match app.mode {
+                    AppMode::Plan => theme.italic_color, // Yellow/orange for Plan mode
+                    _ => theme.header_color,           // Teal/green for Normal/Yolo
                 };
+                let border_style = Style::default()
+                    .fg(border_color)
+                    .bg(theme.user_bg)
+                    .add_modifier(Modifier::BOLD);
+                let bg_style = Style::default().bg(theme.user_bg);
+                
+                // User box must fit within wrap_width (width - 2)
+                let wrap_width = width.saturating_sub(2);
+                let pad_width = wrap_width.saturating_sub(2);
+                
+                // Top padding line (full-width background + left border)
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        prefix,
-                        Style::default()
-                            .fg(theme.dim)
-                            .bg(theme.user_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        content.to_string(),
-                        Style::default().fg(theme.user_fg).bg(theme.user_bg),
-                    ),
-                    Span::styled(trail, Style::default().bg(theme.user_bg)),
+                    Span::styled("┃ ", border_style),
+                    Span::styled(" ".repeat(pad_width), bg_style),
                 ]));
+                
+                // Content lines
+                for content_line in msg.content.lines() {
+                    let prefix = "  "; // 2 spaces padding on left
+                    let used_width = 2 + prefix.len() + content_line.len();
+                    let trail = if wrap_width > used_width {
+                        " ".repeat(wrap_width - used_width)
+                    } else {
+                        String::new()
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled("┃ ", border_style),
+                        Span::styled(
+                            format!("{}{}", prefix, content_line),
+                            Style::default().fg(theme.user_fg).bg(theme.user_bg),
+                        ),
+                        Span::styled(trail, bg_style),
+                    ]));
+                }
+                
+                // Bottom padding line (full-width background + left border)
+                lines.push(Line::from(vec![
+                    Span::styled("┃ ", border_style),
+                    Span::styled(" ".repeat(pad_width), bg_style),
+                ]));
+                
+                lines.push(Line::from("")); // Space below the block
             }
             "thought_time" => {
-                // "◆ Thought for Xs" like Grok CLI (no italics)
-                lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!("  \u{25c6} Thought for {}", msg.content),
                     Style::default().fg(theme.dim),
                 )));
-                lines.push(Line::from(""));
             }
             "assistant" => {
-                let md_lines = render_markdown(&msg.content, theme);
+                let md_lines = render_markdown(msg.content.trim(), wrap_width, theme);
                 lines.extend(md_lines);
             }
             "turn_time" => {
-                // "Turn completed in Xs." (with trailing period)
-                lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!("  Turn completed in {}.", msg.content),
                     Style::default().fg(theme.dim),
@@ -226,15 +275,31 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                 };
 
                 if let Some((name, cmd)) = parsed {
-                    lines.push(Line::from(""));
+                    // 1. Top border: "  ┌── [tool: name]"
                     lines.push(Line::from(Span::styled(
                         format!("  ┌── [tool: {}]", name),
                         Style::default().fg(theme.dim),
                     )));
+
+                    // 2. Command line: "  │ $ cmd"
                     lines.push(Line::from(vec![
                         Span::styled("  │ ", Style::default().fg(theme.dim)),
                         Span::styled(format!("$ {}", cmd), Style::default().fg(theme.code_fg).add_modifier(Modifier::BOLD)),
                     ]));
+
+                    // Check if next is tool_result
+                    let is_next_tool_result = if let Some(next_msg) = app.messages.get(msg_idx + 1) {
+                        next_msg.role == "tool_result"
+                    } else {
+                        false
+                    };
+
+                    if !is_next_tool_result {
+                        lines.push(Line::from(Span::styled(
+                            "  └──",
+                            Style::default().fg(theme.dim),
+                        )));
+                    }
                 } else {
                     lines.push(Line::from(vec![
                         Span::styled("  \u{2503}  ", Style::default().fg(theme.border)),
@@ -254,17 +319,16 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
                 for line in display_output.lines() {
                     lines.push(Line::from(vec![
                         Span::styled("  │ ", Style::default().fg(theme.dim)),
-                        Span::styled(line.to_string(), Style::default().fg(theme.code_block_fg).bg(theme.code_bg)),
+                        Span::styled(line.to_string(), Style::default().fg(theme.code_block_fg)),
                     ]));
                 }
+                
                 lines.push(Line::from(Span::styled(
                     "  └──",
                     Style::default().fg(theme.dim),
                 )));
-                lines.push(Line::from(""));
             }
             "thinking" => {
-                lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "  ┌── Thought Process",
                     Style::default().fg(theme.dim),
@@ -288,7 +352,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
             }
             "system" => {
                 if msg.content.starts_with("Todos:") {
-                    lines.push(Line::from(""));
                     // "┃  ◆ Implementation Plan" header
                     lines.push(Line::from(vec![
                         Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
@@ -370,7 +433,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
     }
 
     // Wrap lines manually to fit the viewport width
-    let wrap_width = (area.width as usize).saturating_sub(2);
     let wrapped_lines = wrap_lines(lines, wrap_width);
 
     // Auto-scroll logic with internal mutability (via Cell)
@@ -395,43 +457,138 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, full_width: u16, them
     frame.render_widget(messages_widget, area);
 }
 
+struct Token {
+    text: String,
+    style: Style,
+    is_whitespace: bool,
+}
+
+fn tokenize_string(text: &str, style: Style, tokens: &mut Vec<Token>) {
+    let mut current = String::new();
+    let mut in_space = None;
+    for c in text.chars() {
+        let is_space = c == ' ';
+        match in_space {
+            None => {
+                in_space = Some(is_space);
+                current.push(c);
+            }
+            Some(space) if space == is_space => {
+                current.push(c);
+            }
+            Some(_) => {
+                tokens.push(Token {
+                    text: current,
+                    style,
+                    is_whitespace: in_space.unwrap(),
+                });
+                current = String::from(c);
+                in_space = Some(is_space);
+            }
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(Token {
+            text: current,
+            style,
+            is_whitespace: in_space.unwrap_or(false),
+        });
+    }
+}
+
 fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
     let width = width.max(1);
     let mut wrapped = Vec::new();
+    
     for line in lines {
         if line.width() <= width {
             wrapped.push(line);
             continue;
         }
 
-        let mut current_spans = Vec::new();
-        let mut current_width = 0;
+        let mut tokens = Vec::new();
+        let mut prefix_spans = Vec::new();
+        let mut prefix_width = 0;
+        let mut in_prefix = true;
 
-        for span in line.spans {
-            let chars: Vec<char> = span.content.chars().collect();
+        for span in &line.spans {
+            let content = &span.content;
             let style = span.style;
-            let mut start = 0;
 
-            while start < chars.len() {
-                if current_width >= width {
-                    wrapped.push(Line::from(current_spans));
-                    current_spans = Vec::new();
-                    current_width = 0;
+            if in_prefix {
+                if content.chars().all(|c| c == ' ') || content == "│ " || content == "┃ " {
+                    prefix_spans.push(span.clone());
+                    prefix_width += content.chars().count();
+                    continue;
+                } else {
+                    let space_count = content.chars().take_while(|&c| c == ' ').count();
+                    if space_count > 0 {
+                        let spaces: String = content.chars().take(space_count).collect();
+                        prefix_spans.push(Span::styled(spaces, style));
+                        prefix_width += space_count;
+                        
+                        let rest: String = content.chars().skip(space_count).collect();
+                        tokenize_string(&rest, style, &mut tokens);
+                    } else {
+                        tokenize_string(content, style, &mut tokens);
+                    }
+                    in_prefix = false;
+                    continue;
                 }
+            }
+            tokenize_string(content, style, &mut tokens);
+        }
 
-                let remaining = width - current_width;
-                let chunk_len = (chars.len() - start).min(remaining);
-                if chunk_len == 0 {
-                    break;
+        let mut current_line_spans = prefix_spans.clone();
+        let mut current_line_width = prefix_width;
+
+        for token in tokens {
+            let token_width = token.text.chars().count();
+            let max_allowed = width.saturating_sub(current_line_width);
+
+            if token_width > max_allowed && !token.is_whitespace {
+                if current_line_width > prefix_width {
+                    wrapped.push(Line::from(std::mem::take(&mut current_line_spans)));
+                    current_line_spans = prefix_spans.clone();
+                    current_line_width = prefix_width;
                 }
-                let chunk: String = chars[start..start + chunk_len].iter().collect();
-                current_spans.push(Span::styled(chunk, style));
-                current_width += chunk_len;
-                start += chunk_len;
+                
+                let chars: Vec<char> = token.text.chars().collect();
+                let mut start = 0;
+                while start < chars.len() {
+                    let limit = width.saturating_sub(current_line_width);
+                    if limit == 0 {
+                        wrapped.push(Line::from(std::mem::take(&mut current_line_spans)));
+                        current_line_spans = prefix_spans.clone();
+                        current_line_width = prefix_width;
+                        continue;
+                    }
+                    let chunk_len = (chars.len() - start).min(limit);
+                    let chunk: String = chars[start..start + chunk_len].iter().collect();
+                    current_line_spans.push(Span::styled(chunk, token.style));
+                    current_line_width += chunk_len;
+                    start += chunk_len;
+                }
+                continue;
+            }
+
+            if current_line_width + token_width > width {
+                if !token.is_whitespace {
+                    wrapped.push(Line::from(std::mem::take(&mut current_line_spans)));
+                    current_line_spans = prefix_spans.clone();
+                    current_line_spans.push(Span::styled(token.text, token.style));
+                    current_line_width = prefix_width + token_width;
+                }
+            } else {
+                current_line_spans.push(Span::styled(token.text, token.style));
+                current_line_width += token_width;
             }
         }
-        if !current_spans.is_empty() {
-            wrapped.push(Line::from(current_spans));
+
+        if current_line_width > prefix_width {
+            wrapped.push(Line::from(current_line_spans));
+        } else if wrapped.is_empty() {
+            wrapped.push(Line::from(prefix_spans));
         }
     }
     wrapped
@@ -479,16 +636,12 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
         0
     };
 
-    let popup_width = match app.autocomplete_mode {
-        AutocompleteMode::Commands => 55.min(input_area.width),
-        AutocompleteMode::Models => 60.min(input_area.width),
-        AutocompleteMode::Effort => 45.min(input_area.width),
-    };
-
+    let popup_width = input_area.width;
     let popup_area = Rect::new(input_area.x, popup_y, popup_width, popup_height);
     frame.render_widget(Clear, popup_area);
 
     let mut lines: Vec<Line> = Vec::new();
+    let inner_width = (popup_width as usize).saturating_sub(2);
 
     for (i, item) in app.autocomplete_items.iter().take(10).enumerate() {
         let is_selected = i == app.autocomplete_selected;
@@ -503,6 +656,13 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
 
         let current_tag = if item.is_current { " (current)" } else { "" };
         let name_padded = format!("{}{:<14}{}", prefix, item.label, current_tag);
+        let desc = format!("  {}", item.description);
+        let text_len = name_padded.chars().count() + desc.chars().count();
+        let trail = if inner_width > text_len {
+            " ".repeat(inner_width - text_len)
+        } else {
+            String::new()
+        };
 
         lines.push(Line::from(vec![
             Span::styled(
@@ -510,10 +670,14 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect, theme: Them
                 Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  {}", item.description),
+                desc,
                 Style::default()
                     .fg(if is_selected { Color::LightCyan } else { theme.dim })
                     .bg(bg),
+            ),
+            Span::styled(
+                trail,
+                Style::default().bg(bg),
             ),
         ]));
     }
@@ -598,7 +762,7 @@ fn short_cwd() -> String {
 // ── Markdown Renderer ────────────────────────────────────────────────────────
 
 /// Render a markdown string into styled Ratatui lines.
-fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
+fn render_markdown(text: &str, wrap_width: usize, theme: Theme) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
@@ -607,7 +771,7 @@ fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
     for raw_line in text.lines() {
         if raw_line.trim_start().starts_with("```") {
             if in_code_block {
-                flush_code_block(&mut lines, &code_lang, &code_lines, theme);
+                flush_code_block(&mut lines, &code_lang, &code_lines, wrap_width, theme);
                 code_lines.clear();
                 code_lang.clear();
                 in_code_block = false;
@@ -641,35 +805,29 @@ fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
         if let Some(rest) = trimmed.strip_prefix("### ") {
             lines.push(Line::from(Span::styled(
                 format!("{}   {}", INDENT, rest),
-                Style::default()
-                    .fg(theme.header_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             )));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("## ") {
             lines.push(Line::from(Span::styled(
                 format!("{}  {}", INDENT, rest),
-                Style::default()
-                    .fg(theme.header_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             )));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("# ") {
             lines.push(Line::from(Span::styled(
                 format!("{}{}", INDENT, rest),
-                Style::default()
-                    .fg(theme.header_color)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
             continue;
         }
 
         let (bullet_prefix, content) = if let Some(rest) = trimmed.strip_prefix("- ") {
-            ("  - ", rest)
+            ("  • ", rest)
         } else if let Some(rest) = trimmed.strip_prefix("* ") {
-            ("  - ", rest)
+            ("  • ", rest)
         } else if trimmed.len() > 2 && trimmed.as_bytes()[0].is_ascii_digit() && trimmed.contains(". ") {
             let dot_pos = trimmed.find(". ").unwrap();
             let num = &trimmed[..dot_pos + 2];
@@ -695,32 +853,59 @@ fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
     }
 
     if in_code_block && !code_lines.is_empty() {
-        flush_code_block(&mut lines, &code_lang, &code_lines, theme);
+        flush_code_block(&mut lines, &code_lang, &code_lines, wrap_width, theme);
     }
 
     lines
 }
 
-fn flush_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[String], theme: Theme) {
+fn flush_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[String], wrap_width: usize, theme: Theme) {
     let lang_label = if lang.is_empty() {
         String::new()
     } else {
         format!(" [{}]", lang)
     };
-    lines.push(Line::from(Span::styled(
-        format!("  ┌──{}", lang_label),
-        Style::default().fg(theme.dim),
-    )));
+    
+    // Top border with code background
+    let top_text = format!("┌──{}", lang_label);
+    let top_len = top_text.chars().count();
+    let padded_top = if wrap_width.saturating_sub(2) > top_len {
+        format!("{}{}", top_text, " ".repeat(wrap_width.saturating_sub(2) - top_len))
+    } else {
+        top_text
+    };
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(padded_top, Style::default().fg(theme.dim).bg(theme.code_bg)),
+    ]));
+    
+    let inner_code_width = wrap_width.saturating_sub(4);
     for cl in code_lines {
-        lines.push(Line::from(Span::styled(
-            format!("  │ {}", cl),
-            Style::default().fg(theme.code_block_fg).bg(theme.code_bg),
-        )));
+        let cl_len = cl.chars().count();
+        let padded_cl = if inner_code_width > cl_len {
+            format!("{}{}", cl, " ".repeat(inner_code_width - cl_len))
+        } else {
+            cl.to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("│ ", Style::default().fg(theme.dim).bg(theme.code_bg)),
+            Span::styled(padded_cl, Style::default().fg(theme.code_block_fg).bg(theme.code_bg)),
+        ]));
     }
-    lines.push(Line::from(Span::styled(
-        "  └──",
-        Style::default().fg(theme.dim),
-    )));
+    
+    // Bottom border with code background
+    let bottom_text = "└──";
+    let bottom_len = bottom_text.chars().count();
+    let padded_bottom = if wrap_width.saturating_sub(2) > bottom_len {
+        format!("{}{}", bottom_text, " ".repeat(wrap_width.saturating_sub(2) - bottom_len))
+    } else {
+        bottom_text.to_string()
+    };
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(padded_bottom, Style::default().fg(theme.dim).bg(theme.code_bg)),
+    ]));
 }
 
 fn parse_inline_markdown(text: &str, theme: Theme) -> Vec<Span<'static>> {
@@ -805,8 +990,8 @@ fn parse_inline_markdown(text: &str, theme: Theme) -> Vec<Span<'static>> {
                 pos += 1;
             }
             spans.push(Span::styled(
-                format!(" {} ", code),
-                Style::default().fg(theme.code_fg).bg(theme.code_bg),
+                code,
+                Style::default().fg(theme.code_fg),
             ));
             continue;
         }

@@ -152,12 +152,13 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
             use std::io::Write;
             let mut is_first_thinking = true;
             let mut is_first_text = true;
+            let mut md_renderer = crate::ansi_markdown::AnsiMarkdownRenderer::new();
 
             while let Some(event) = agent_rx.recv().await {
                 match event {
                     AgentEvent::Thinking(text) => {
                         if is_first_thinking {
-                            print!("\x1b[38;2;139;92;246m🤔 Thinking:\x1b[0m \x1b[90m");
+                            print!("\x1b[38;2;139;92;246m◆ Thinking:\x1b[0m \x1b[90m");
                             is_first_thinking = false;
                         }
                         print!("{}", text);
@@ -170,19 +171,37 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             is_first_thinking = true;
                         }
                         if is_first_text {
-                            print!("\x1b[32mAgent:\x1b[0m ");
+                            println!();
                             is_first_text = false;
                         }
-                        print!("{}", text);
-                        let _ = std::io::stdout().flush();
+                        let rendered = md_renderer.feed(&text);
+                        if !rendered.is_empty() {
+                            print!("{}", rendered);
+                            let _ = std::io::stdout().flush();
+                        }
                     }
                     AgentEvent::ToolCall { name, args_preview } => {
                         if !is_first_thinking {
                             print!("\x1b[0m\n");
                             is_first_thinking = true;
                         }
+                        // Flush any buffered markdown before tool call
+                        let flushed = md_renderer.flush();
+                        if !flushed.is_empty() {
+                            print!("{}", flushed);
+                        }
                         is_first_text = true;
-                        println!("\x1b[36m[tool] {}\x1b[0m {}", name, &args_preview[..args_preview.len().min(200)]);
+                        println!("\n  \x1b[90m┌── [tool: {}]\x1b[0m", name);
+                        let display_cmd = if name == "run_command" {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&args_preview) {
+                                v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args_preview[..args_preview.len().min(200)].to_string())
+                            } else {
+                                args_preview[..args_preview.len().min(200)].to_string()
+                            }
+                        } else {
+                            args_preview[..args_preview.len().min(200)].to_string()
+                        };
+                        println!("  \x1b[90m│\x1b[0m \x1b[38;2;106;191;106;1m$ {}\x1b[0m", display_cmd);
                     }
                     AgentEvent::ToolResult { name: _, output } => {
                         let cleaned = output.replace("\r\n", "\n");
@@ -193,28 +212,40 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             cleaned
                         };
                         for line in truncated.lines() {
-                            println!("\x1b[90m  → {}\x1b[0m", line);
+                            println!("  \x1b[90m│\x1b[0m \x1b[38;2;192;192;192m{}\x1b[0m", line);
                         }
+                        println!("  \x1b[90m└──\x1b[0m");
                     }
-                    AgentEvent::FinalResponse(text) => {
+                    AgentEvent::FinalResponse(_text) => {
                         if !is_first_thinking {
                             print!("\x1b[0m\n");
                         }
-                        if is_first_text {
-                            println!("\x1b[32mAgent:\x1b[0m {}", text);
-                        } else {
-                            println!();
+                        // Flush remaining buffered markdown
+                        let flushed = md_renderer.flush();
+                        if !flushed.is_empty() {
+                            print!("{}", flushed);
                         }
+                        if is_first_text {
+                            // No text was streamed, render the final response directly
+                            let mut final_renderer = crate::ansi_markdown::AnsiMarkdownRenderer::new();
+                            let rendered = final_renderer.feed(&format!("{}\n", _text));
+                            print!("{}", rendered);
+                            let flushed = final_renderer.flush();
+                            if !flushed.is_empty() {
+                                print!("{}", flushed);
+                            }
+                        }
+                        println!();
                     }
                     AgentEvent::TodoUpdate(todos) => {
-                        println!("\x1b[33mTodos:\x1b[0m");
+                        println!("\n  \x1b[38;2;232;164;101;1m◆ Implementation Plan\x1b[0m");
                         for t in &todos {
-                            let icon = match t.status.as_str() {
-                                "done" => "✓",
-                                "in_progress" => "→",
-                                _ => "○",
+                            let (icon, color) = match t.status.as_str() {
+                                "done" => ("✓", "\x1b[32m"),
+                                "in_progress" => ("→", "\x1b[33m"),
+                                _ => ("○", "\x1b[90m"),
                             };
-                            println!("  {} {}", icon, t.content);
+                            println!("    {}{} {}\x1b[0m", color, icon, t.content);
                         }
                     }
                 }
