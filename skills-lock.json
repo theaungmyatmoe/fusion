@@ -1,15 +1,1 @@
-{
-  "termux-api": {
-    "version": "1.0.7",
-    "source": "termux-skill",
-    "bundleHash": "ada4b886bb0b37961b1b3c22a4d9ef580c57f139d6b9310b41543498a1e42f58",
-    "installedAt": "2026-07-09T04:47:10.136Z",
-    "agents": [
-      ".agents/skills",
-      ".claude/skills",
-      ".cursor/skills",
-      ".windsurf/skills",
-      ".continue/skills"
-    ]
-  }
-}
+{}

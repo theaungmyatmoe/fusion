@@ -12,12 +12,14 @@ pub mod glob;
 /// Tool registry — maps tool names to their execution logic.
 pub struct ToolRegistry {
     cwd: String,
+    _keenable_api_key: Option<String>,
 }
 
 impl ToolRegistry {
-    pub fn new(cwd: &str) -> Self {
+    pub fn new(cwd: &str, keenable_api_key: Option<String>) -> Self {
         Self {
             cwd: cwd.to_string(),
+            _keenable_api_key: keenable_api_key,
         }
     }
 

@@ -108,6 +108,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.autocomplete_visible && !app.autocomplete_items.is_empty() {
         draw_autocomplete(frame, app, chunks[3], theme);
     }
+
+    if let Some(ref gq) = app.active_grill_question {
+        draw_grill_question(frame, gq, chunks[3], area, theme);
+    }
 }
 
 fn get_git_branch() -> Option<String> {
@@ -164,6 +168,94 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         Span::styled(right, Style::default().fg(theme.dim)),
     ]));
     frame.render_widget(bar, area);
+}
+
+// ── Gradient-Spin Animation Elements ───────────────────────────────────────
+
+struct GradientStop {
+    color: (u8, u8, u8),
+    position: f64,
+}
+
+const SUNSET_AURORA: &[GradientStop] = &[
+    GradientStop { color: (139, 92, 246), position: 0.0 },  // Violet
+    GradientStop { color: (236, 72, 153), position: 0.33 }, // Pink
+    GradientStop { color: (249, 115, 22), position: 0.66 },  // Orange
+    GradientStop { color: (20, 184, 166), position: 1.0 },  // Teal
+];
+
+fn sample_gradient(stops: &[GradientStop], t: f64) -> (u8, u8, u8) {
+    if stops.is_empty() {
+        return (255, 255, 255);
+    }
+    let t = t.clamp(0.0, 1.0);
+    let mut lower = &stops[0];
+    let mut upper = &stops[stops.len() - 1];
+    
+    for i in 0..stops.len() - 1 {
+        if t >= stops[i].position && t <= stops[i+1].position {
+            lower = &stops[i];
+            upper = &stops[i+1];
+            break;
+        }
+    }
+    
+    let span = upper.position - lower.position;
+    let mix = if span == 0.0 { 0.0 } else { (t - lower.position) / span };
+    
+    let r = (lower.color.0 as f64 + (upper.color.0 as f64 - lower.color.0 as f64) * mix).round() as u8;
+    let g = (lower.color.1 as f64 + (upper.color.1 as f64 - lower.color.1 as f64) * mix).round() as u8;
+    let b = (lower.color.2 as f64 + (upper.color.2 as f64 - lower.color.2 as f64) * mix).round() as u8;
+    
+    (r, g, b)
+}
+
+fn blend_with_bg(fg: (u8, u8, u8), bg: (u8, u8, u8), opacity: f64) -> Color {
+    let r = (fg.0 as f64 * opacity + bg.0 as f64 * (1.0 - opacity)).round() as u8;
+    let g = (fg.1 as f64 * opacity + bg.1 as f64 * (1.0 - opacity)).round() as u8;
+    let b = (fg.2 as f64 * opacity + bg.2 as f64 * (1.0 - opacity)).round() as u8;
+    Color::Rgb(r, g, b)
+}
+
+fn draw_gradient_spinner(app: &App, theme: &Theme) -> Line<'static> {
+    let t = app.tick_count;
+    let period = 12; // 12 ticks = 1.2s loop
+    
+    let is_dark = app.theme.eq_ignore_ascii_case("dark");
+    let bg_color = if is_dark {
+        (11, 11, 13) // #0b0b0d
+    } else {
+        (255, 255, 255) // #ffffff
+    };
+    
+    let mut spans = vec![
+        Span::styled("  \u{25c6} Thought process  ", Style::default().fg(theme.dim)),
+    ];
+    
+    let dim = 0.18; // Minimum cell brightness multiplier
+    let cols = 6;
+    
+    for c in 0..cols {
+        let phase = (c as f64) / (cols as f64);
+        let progress = ((t as f64) / (period as f64) + phase) % 1.0;
+        
+        // Piecewise opacity animation curve (matches gradient-spin-pulse CSS keyframes)
+        let opacity = if progress < 0.45 {
+            1.0 - (progress / 0.45) * (1.0 - dim)
+        } else if progress < 0.92 {
+            dim
+        } else {
+            dim + ((progress - 0.92) / (1.0 - 0.92)) * (1.0 - dim)
+        };
+        
+        let color_t = (c as f64) / ((cols - 1) as f64);
+        let fg_color = sample_gradient(SUNSET_AURORA, color_t);
+        let blended = blend_with_bg(fg_color, bg_color, opacity);
+        
+        spans.push(Span::styled(" \u{25aa}", Style::default().fg(blended)));
+    }
+    
+    Line::from(spans)
 }
 
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, theme: Theme) {
@@ -492,17 +584,8 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
         }
 
         if app.is_thinking {
-            let frame = (app.tick_count / 2) % 3;
-            let loader = match frame {
-                0 => " [ \u{25a0} \u{22c5} \u{22c5} ]",
-                1 => " [ \u{22c5} \u{25a0} \u{22c5} ]",
-                _ => " [ \u{22c5} \u{22c5} \u{25a0} ]",
-            };
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  \u{25c6} Thought process", Style::default().fg(theme.dim)),
-                Span::styled(loader, Style::default().fg(theme.header_color)),
-            ]));
+            lines.push(draw_gradient_spinner(app, &theme));
         }
 
         // Draw queued prompts if any
@@ -799,10 +882,23 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         String::new()
     };
 
+    let mut flags = Vec::new();
+    if app.grill_mode {
+        flags.push("grill");
+    }
+    if app.arbitrage_mode {
+        flags.push("arbitrage");
+    }
+    let flags_str = if flags.is_empty() {
+        String::new()
+    } else {
+        format!(" - {}", flags.join("+"))
+    };
+
     let mode_str = match app.mode {
-        AppMode::Normal => "",
-        AppMode::Yolo => " - always-approve",
-        AppMode::Plan => " - plan-mode",
+        AppMode::Normal => flags_str,
+        AppMode::Yolo => format!(" - always-approve{}", if flags.is_empty() { "".to_string() } else { format!("+{}", flags.join("+")) }),
+        AppMode::Plan => " - plan-mode".to_string(),
     };
 
     let right_text = format!("{}{}{}", model_display, level_str, mode_str);
@@ -1142,4 +1238,134 @@ fn parse_inline_markdown(text: &str, theme: Theme) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+fn draw_grill_question(frame: &mut Frame, gq: &crate::app::GrillQuestion, input_area: Rect, _screen_area: Rect, theme: Theme) {
+    use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+    use ratatui::layout::{Alignment, Constraint, Layout};
+    use ratatui::style::{Modifier, Style};
+
+    let num_options = gq.options.len();
+    let popup_width = input_area.width;
+    let title_width = popup_width.saturating_sub(4) as usize;
+    
+    // Estimate wrapping lines for the question title
+    let mut title_lines = 0;
+    let mut current_len = 0;
+    for word in gq.title.split_whitespace() {
+        if current_len + word.len() + 1 > title_width {
+            title_lines += 1;
+            current_len = word.len();
+        } else {
+            current_len += word.len() + 1;
+        }
+    }
+    if current_len > 0 {
+        title_lines += 1;
+    }
+    let title_lines = title_lines.max(1);
+
+    // Calculate height defensively, capping it to the space above the input area
+    let raw_height = title_lines + num_options + 5;
+    let max_allowed_height = input_area.y as usize;
+    let popup_height = (raw_height.min(max_allowed_height)).max(3) as u16;
+    
+    let popup_y = input_area.y.saturating_sub(popup_height);
+
+    let popup_area = Rect::new(input_area.x, popup_y, popup_width, popup_height);
+    frame.render_widget(Clear, popup_area);
+
+    // Create the border block
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.popup_border))
+        .style(Style::default().bg(theme.autocomplete_bg))
+        .title(Span::styled(
+            " Grill Mode ",
+            Style::default()
+                .fg(theme.selected_fg)
+                .bg(theme.selected_bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_rect = block.inner(popup_area);
+    let chunks = Layout::vertical([
+        Constraint::Length(title_lines as u16), // Question title
+        Constraint::Length(1),                  // Spacer line
+        Constraint::Min(num_options as u16),    // Options list
+        Constraint::Length(1),                  // Divider line
+        Constraint::Length(1),                  // Hint bar
+    ])
+    .split(inner_rect);
+
+    // 1. Draw border block
+    frame.render_widget(block, popup_area);
+
+    // 2. Draw Question Title
+    let question_widget = Paragraph::new(gq.title.clone())
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(theme.label_color).add_modifier(Modifier::BOLD));
+    frame.render_widget(question_widget, chunks[0]);
+
+    // 3. Draw spacer line
+    let spacer = Paragraph::new("─".repeat(chunks[1].width as usize))
+        .style(Style::default().fg(theme.dim));
+    frame.render_widget(spacer, chunks[1]);
+
+    // 4. Draw Options List
+    let items: Vec<ListItem> = gq
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let is_selected = i == gq.selected;
+            let is_custom = num_options >= 2 && i == num_options - 2;
+            let is_skip = num_options >= 1 && i == num_options - 1;
+
+            let (marker, text_style) = if is_selected {
+                (
+                    Span::styled("\u{276f} ", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD)),
+                    Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD)
+                )
+            } else {
+                (
+                    Span::styled("  ", Style::default().fg(theme.dim)),
+                    Style::default().fg(theme.label_color)
+                )
+            };
+
+            let prefix = if is_skip {
+                Span::styled("[Skip] ", Style::default().fg(if is_selected { theme.selected_fg } else { theme.dim }))
+            } else if is_custom {
+                Span::styled("[Custom] ", Style::default().fg(if is_selected { theme.selected_fg } else { theme.dim }))
+            } else {
+                Span::styled(format!("{}. ", i + 1), Style::default().fg(if is_selected { theme.selected_fg } else { theme.dim }))
+            };
+
+            let line_spans = vec![marker, prefix, Span::styled(opt, text_style)];
+            
+            let item_style = if is_selected {
+                Style::default().bg(theme.selected_bg)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(line_spans)).style(item_style)
+        })
+        .collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, chunks[2]);
+
+    // 5. Draw divider before hint
+    let divider = Paragraph::new("─".repeat(chunks[3].width as usize))
+        .style(Style::default().fg(theme.dim));
+    frame.render_widget(divider, chunks[3]);
+
+    // 6. Draw Hint
+    let hint_text = "▲/▼: Navigate  │  Enter: Select  │  Esc: Dismiss  │  Or type custom answer";
+    let hint = Paragraph::new(hint_text)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(theme.dim));
+    frame.render_widget(hint, chunks[4]);
 }

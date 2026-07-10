@@ -36,6 +36,14 @@ pub struct SlashCommand {
     pub has_submenu: bool,
 }
 
+/// A parsed question and selectable recommended options for Grill Mode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GrillQuestion {
+    pub title: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+}
+
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/help", description: "Show all commands", has_submenu: false },
     SlashCommand { name: "/yolo", description: "Toggle auto-approve mode", has_submenu: false },
@@ -49,6 +57,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/session", description: "Show current session ID", has_submenu: false },
     SlashCommand { name: "/sessions", description: "List saved sessions", has_submenu: false },
     SlashCommand { name: "/clear", description: "Clear message history", has_submenu: false },
+    SlashCommand { name: "/grill", description: "Toggle design interview mode", has_submenu: false },
+    SlashCommand { name: "/arbitrage", description: "Toggle model token arbitrage mode", has_submenu: false },
+    SlashCommand { name: "/dq", description: "Clear or remove queued prompts", has_submenu: false },
+    SlashCommand { name: "/theme", description: "Toggle light/dark theme", has_submenu: false },
+    SlashCommand { name: "/taste", description: "Scan and learn coding style preferences", has_submenu: false },
+    SlashCommand { name: "/design", description: "Scan and learn UI/design preferences", has_submenu: false },
     SlashCommand { name: "/image", description: "Insert clipboard image (macOS)", has_submenu: false },
     SlashCommand { name: "/edit", description: "Compose/edit input in external editor", has_submenu: false },
     SlashCommand { name: "/quit", description: "Quit (session auto-saved)", has_submenu: false },
@@ -113,10 +127,68 @@ pub struct App {
     // Queued user prompts to execute sequentially
     pub queued_prompts: Vec<String>,
 
+    // True if interactive design interview mode is enabled
+    pub grill_mode: bool,
+
+    // True if model token arbitrage mode is enabled
+    pub arbitrage_mode: bool,
+
+    pub active_grill_question: Option<GrillQuestion>,
+
     agent: Arc<Mutex<Agent>>,
     session: Session,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     pub agent_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+fn detect_theme(config: &Config) -> String {
+    if let Ok(theme) = std::env::var("FUSION_THEME") {
+        return theme;
+    }
+    if let Ok(theme) = std::env::var("ZENCODE_THEME") {
+        return theme;
+    }
+    if let Some(theme) = config.settings.get("theme").and_then(|v| v.as_str()) {
+        return theme.to_string();
+    }
+
+    // 1. Detect via COLORFGBG environment variable (supported in many terminal emulators)
+    if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
+        if let Some(bg) = colorfgbg.split(';').last() {
+            if let Ok(bg_num) = bg.parse::<i32>() {
+                // Background colors 0-8 are typically dark; 9-15 are light.
+                if (0..8).contains(&bg_num) || bg_num == 0 || bg_num == 16 {
+                    return "dark".to_string();
+                } else {
+                    return "light".to_string();
+                }
+            }
+        }
+    }
+
+    // 2. Detect macOS system theme
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.trim().eq_ignore_ascii_case("Dark") {
+                    return "dark".to_string();
+                }
+            }
+        }
+    }
+
+    // 3. Default to dark on Termux
+    if fusion_core::config::is_termux() {
+        return "dark".to_string();
+    }
+
+    // Default fallback
+    "dark".to_string()
 }
 
 impl App {
@@ -136,14 +208,7 @@ impl App {
 
         let messages = Vec::new();
 
-        let theme = std::env::var("FUSION_THEME")
-            .or_else(|_| std::env::var("ZENCODE_THEME"))
-            .unwrap_or_else(|_| {
-                config.settings.get("theme")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("light")
-                    .to_string()
-            });
+        let theme = detect_theme(config);
 
         Self {
             messages,
@@ -172,6 +237,9 @@ impl App {
             editor_requested: None,
             message_cache: RefCell::new(None),
             queued_prompts: Vec::new(),
+            grill_mode: false,
+            arbitrage_mode: false,
+            active_grill_question: None,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -209,14 +277,7 @@ impl App {
             AppMode::Normal
         };
 
-        let theme = std::env::var("FUSION_THEME")
-            .or_else(|_| std::env::var("ZENCODE_THEME"))
-            .unwrap_or_else(|_| {
-                config.settings.get("theme")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("light")
-                    .to_string()
-            });
+        let theme = detect_theme(config);
 
         Self {
             messages,
@@ -245,11 +306,128 @@ impl App {
             editor_requested: None,
             message_cache: RefCell::new(None),
             queued_prompts: Vec::new(),
+            grill_mode: false,
+            arbitrage_mode: false,
+            active_grill_question: None,
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
             agent_handle: None,
         }
+    }
+
+    /// Strip markdown bold/italic markers from text (handles inline **bold** and *italic*)
+    fn strip_markdown_formatting(s: &str) -> String {
+        s.replace("**", "").replace("__", "").replace("*", "").replace("_", "")
+    }
+
+    pub fn try_parse_grill_question(text: &str) -> Option<GrillQuestion> {
+        let mut options = Vec::new();
+        
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            
+            // Detect real bullets: • always, * only if followed by space (not **bold**), - and + followed by space
+            let is_bullet = trimmed.starts_with('•')
+                || (trimmed.starts_with('*') && !trimmed.starts_with("**") && trimmed.chars().nth(1) == Some(' '))
+                || (trimmed.starts_with('-') && trimmed.chars().nth(1) == Some(' '))
+                || (trimmed.starts_with('+') && trimmed.chars().nth(1) == Some(' '));
+            let content_part = trimmed.trim_start_matches(|c| c == '*' || c == '-' || c == '+' || c == '•' || c == ' ');
+            let mut has_prefix = false;
+            
+            if let Some(punc_pos) = content_part.find(|c| c == '.' || c == ')' || c == ']') {
+                let index_str = &content_part[..punc_pos].trim();
+                if !index_str.is_empty() && index_str.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    let content = &content_part[punc_pos + 1..];
+                    let stripped = Self::strip_markdown_formatting(content.trim());
+                    let cleaned = stripped.trim();
+                    if !cleaned.is_empty() {
+                        options.push(cleaned.to_string());
+                        has_prefix = true;
+                    }
+                }
+            }
+            
+            if !has_prefix && is_bullet {
+                let stripped = Self::strip_markdown_formatting(content_part.trim());
+                let cleaned = stripped.trim();
+                if !cleaned.is_empty() {
+                    options.push(cleaned.to_string());
+                }
+            }
+        }
+        
+        // We only treat it as a Grill Mode question if we found at least 2 options
+        if options.len() < 2 {
+            return None;
+        }
+ 
+        // Add custom write-in option and skip option
+        options.push("Write custom response...".to_string());
+        options.push("Skip (Dismiss dialog)".to_string());
+ 
+        // Find the title (clarifying question)
+        // Find the line index of the first option in the original text lines
+        let first_option_idx = text.lines()
+            .position(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() { return false; }
+                let is_bullet = trimmed.starts_with('•')
+                    || (trimmed.starts_with('*') && !trimmed.starts_with("**") && trimmed.chars().nth(1) == Some(' '))
+                    || (trimmed.starts_with('-') && trimmed.chars().nth(1) == Some(' '))
+                    || (trimmed.starts_with('+') && trimmed.chars().nth(1) == Some(' '));
+                let content_part = trimmed.trim_start_matches(|c| c == '*' || c == '-' || c == '+' || c == '•' || c == ' ');
+                if let Some(punc_pos) = content_part.find(|c| c == '.' || c == ')' || c == ']') {
+                    let index_str = &content_part[..punc_pos].trim();
+                    if !index_str.is_empty() && index_str.chars().all(|c| c.is_ascii_alphanumeric()) {
+                        return true;
+                    }
+                }
+                is_bullet
+            });
+            
+        let mut question_title = "Clarifying Question".to_string();
+        if let Some(opt_idx) = first_option_idx {
+            let lines: Vec<&str> = text.lines().collect();
+            // 1. First scan backwards for a line ending with a question mark
+            for i in (0..opt_idx).rev() {
+                let line = lines[i].trim();
+                // Strip markdown first, then check for question mark
+                let stripped = Self::strip_markdown_formatting(line);
+                let stripped = stripped.trim();
+                if stripped.ends_with('?') {
+                    if !stripped.is_empty() {
+                        question_title = stripped.to_string();
+                        break;
+                    }
+                }
+            }
+            // 2. If no line ends with '?', take the first non-empty line above the first option that isn't a header label
+            if question_title == "Clarifying Question" {
+                for i in (0..opt_idx).rev() {
+                    let line = lines[i].trim();
+                    if !line.is_empty() && !line.to_lowercase().contains("choices") && !line.to_lowercase().contains("question") {
+                        let cleaned = Self::strip_markdown_formatting(line);
+                        let cleaned = cleaned.trim();
+                        if !cleaned.is_empty() {
+                            question_title = cleaned.to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+
+
+        Some(GrillQuestion {
+            title: question_title,
+            options,
+            selected: 0,
+        })
     }
 
     pub fn handle_paste(&mut self, text: String) {
@@ -337,6 +515,61 @@ impl App {
                 }
                 return;
             }
+        }
+
+        let mut grill_action = None;
+        if let Some(ref mut gq) = self.active_grill_question {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Up) => {
+                    if gq.selected > 0 {
+                        gq.selected -= 1;
+                    } else {
+                        gq.selected = gq.options.len().saturating_sub(1);
+                    }
+                    return;
+                }
+                (_, KeyCode::Down) => {
+                    if !gq.options.is_empty() {
+                        gq.selected = (gq.selected + 1) % gq.options.len();
+                    }
+                    return;
+                }
+                (_, KeyCode::Esc) => {
+                    grill_action = Some(None);
+                }
+                (_, KeyCode::Enter) => {
+                    if self.input.is_empty() {
+                        let opt_count = gq.options.len();
+                        if opt_count > 1 && gq.selected == opt_count - 1 {
+                            // Skip selected: clear question dialog with no action
+                            grill_action = Some(None);
+                        } else if opt_count > 0 && gq.selected == opt_count - 2 {
+                            // Custom write-in selected: require typing first
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: "Please type your custom response in the input box and press Enter.".to_string(),
+                            });
+                            return;
+                        } else if opt_count > 0 {
+                            let choice = gq.options[gq.selected].clone();
+                            grill_action = Some(Some(format!("Selected Option: {}", choice)));
+                        }
+                    } else {
+                        let text = self.input.clone();
+                        self.input.clear();
+                        grill_action = Some(Some(text));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(action) = grill_action {
+            self.active_grill_question = None;
+            if let Some(prompt) = action {
+                self.handle_submit(prompt);
+            }
+            return;
         }
 
         if self.autocomplete_visible {
@@ -716,6 +949,7 @@ impl App {
 
         let tx = self.event_tx.clone();
         let agent = Arc::clone(&self.agent);
+        let grill_mode_active = self.grill_mode;
 
         let handle = tokio::spawn(async move {
             let mut agent = agent.lock().await;
@@ -728,7 +962,17 @@ impl App {
                 }
             });
 
-            if let Err(e) = agent.process(&text, agent_tx).await {
+            let mut processed_text = text.clone();
+            if grill_mode_active {
+                processed_text = format!(
+                    "{}\n\n[SYSTEM DIRECTIVE: You are in Grill Mode. Do NOT execute any code writing or file modification tools yet. \
+                     Instead, analyze my request and ask me exactly ONE clarifying design or implementation question to refine the plan. \
+                     Propose recommended choices for me. Do NOT generate the full code until we align.]",
+                    processed_text
+                );
+            }
+
+            if let Err(e) = agent.process(&processed_text, agent_tx).await {
                 let _ = tx.send(AppEvent::Agent(AgentEvent::FinalResponse(format!(
                     "Error: {}",
                     e
@@ -858,8 +1102,15 @@ impl App {
                 };
                 trigger_desktop_notification("Fusion Coder", summary);
 
-                // Process the next queued prompt if any!
-                if !self.queued_prompts.is_empty() {
+                // If Grill Mode is active, parse the response for a question & recommended choices
+                if self.grill_mode {
+                    if let Some(gq) = Self::try_parse_grill_question(&text) {
+                        self.active_grill_question = Some(gq);
+                    }
+                }
+
+                // Process the next queued prompt if any (only if a grill modal is not active!)
+                if self.active_grill_question.is_none() && !self.queued_prompts.is_empty() {
                     let next_prompt = self.queued_prompts.remove(0);
                     self.handle_submit(next_prompt);
                 }
@@ -904,7 +1155,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /image      insert clipboard image (macOS)\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /dq [n]     clear queue or dequeue item n\n  /quit       quit (session auto-saved)".to_string(),
+                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /grill      toggle grill mode (design interview)\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /image      insert clipboard image (macOS)\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /dq [n]     clear queue or dequeue item n\n  /quit       quit (session auto-saved)".to_string(),
                 });
             }
             "/yolo" => {
@@ -1132,6 +1383,99 @@ impl App {
                         role: "system".to_string(),
                         content: format!("Theme toggled to: {}", self.theme),
                     });
+                }
+            }
+            "/grill" | "/grill-me" => {
+                self.grill_mode = !self.grill_mode;
+                let status = if self.grill_mode {
+                    "ENABLED. The agent will ask clarifying questions to refine your plan before code execution."
+                } else {
+                    "DISABLED. Normal execution mode."
+                };
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!("Grill Mode {}", status),
+                });
+            }
+            "/arbitrage" => {
+                self.arbitrage_mode = !self.arbitrage_mode;
+                let status = if self.arbitrage_mode {
+                    "ENABLED. Code edits will be delegated to a fast/cheap model to save premium tokens."
+                } else {
+                    "DISABLED."
+                };
+                // Propagate to the agent in a spawned task
+                let agent = Arc::clone(&self.agent);
+                let mode = self.arbitrage_mode;
+                tokio::spawn(async move {
+                    let mut agent = agent.lock().await;
+                    agent.arbitrage_mode = mode;
+                });
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!("Arbitrage Mode {}", status),
+                });
+            }
+            "/taste" => {
+                let cwd_path = std::path::Path::new(&self.session.cwd);
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: "Scanning codebase for style preferences...".to_string(),
+                });
+                let rules = fusion_core::taste::scan_taste_preferences(cwd_path);
+                if rules.is_empty() {
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: "No dominant style preferences could be automatically detected (too few files or mixed style).".to_string(),
+                    });
+                } else {
+                    if let Err(e) = fusion_core::taste::save_taste_rules(cwd_path, &rules) {
+                        self.messages.push(Message {
+                            role: "error".to_string(),
+                            content: format!("Failed to save taste rules: {}", e),
+                        });
+                    } else {
+                        let mut summary = vec!["✓ Successfully learned code style!".to_string()];
+                        for r in &rules {
+                            summary.push(format!("  - {} (Confidence: {:.2})", r.rule, r.confidence));
+                        }
+                        summary.push("\nRules saved to .fusion/taste.md".to_string());
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: summary.join("\n"),
+                        });
+                    }
+                }
+            }
+            "/design" => {
+                let cwd_path = std::path::Path::new(&self.session.cwd);
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: "Scanning codebase for design preferences...".to_string(),
+                });
+                let rules = fusion_core::design::scan_design_preferences(cwd_path);
+                if rules.is_empty() {
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: "No design preferences detected (no frontend/UI files found or mixed patterns).".to_string(),
+                    });
+                } else {
+                    if let Err(e) = fusion_core::design::save_design_rules(cwd_path, &rules) {
+                        self.messages.push(Message {
+                            role: "error".to_string(),
+                            content: format!("Failed to save design rules: {}", e),
+                        });
+                    } else {
+                        let mut summary = vec!["✓ Successfully learned design preferences!".to_string()];
+                        for r in &rules {
+                            summary.push(format!("  - {} (Confidence: {:.2})", r.rule, r.confidence));
+                        }
+                        summary.push("\nRules saved to .fusion/design.md".to_string());
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: summary.join("\n"),
+                        });
+                    }
                 }
             }
             _ => {
@@ -1460,5 +1804,87 @@ mod tests {
         // Test /dq (clear all remaining)
         app.handle_slash("/dq");
         assert!(app.queued_prompts.is_empty());
+    }
+
+    #[test]
+    fn test_grill_mode() {
+        let config = Config {
+            model: "test-model".to_string(),
+            small_model: None,
+            yolo: false,
+            provider: fusion_core::config::Provider::Auto,
+            cloudflare_account_id: None,
+            api_key: String::new(),
+            base_url: String::new(),
+            config_path: None,
+            settings: std::collections::HashMap::new(),
+        };
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, event_tx);
+
+        assert!(!app.grill_mode);
+
+        // Toggle grill mode on
+        app.handle_slash("/grill");
+        assert!(app.grill_mode);
+
+        // Toggle grill mode off
+        app.handle_slash("/grill-me");
+        assert!(!app.grill_mode);
+    }
+
+    #[test]
+    fn test_grill_question_parser() {
+        let text = "Great - a todo app is a classic project.\n\n\
+                    One clarifying question:\n\
+                    **What kind of persistence and architecture do you want?**\n\n\
+                    Recommended choices:\n\
+                    1. Pure frontend, in-memory only\n\
+                    2. Frontend with localStorage\n\
+                    3. Full-stack with a backend + database\n\n\
+                    Which direction fits your goal?";
+                    
+        let gq = App::try_parse_grill_question(text).unwrap();
+        println!("PARSED OPTIONS: {:?}", gq.options);
+        assert_eq!(gq.title, "What kind of persistence and architecture do you want?");
+        assert_eq!(gq.options.len(), 5);
+        assert_eq!(gq.options[0], "Pure frontend, in-memory only");
+        assert_eq!(gq.options[1], "Frontend with localStorage");
+        assert_eq!(gq.options[2], "Full-stack with a backend + database");
+        assert_eq!(gq.options[3], "Write custom response...");
+        assert_eq!(gq.options[4], "Skip (Dismiss dialog)");
+        assert_eq!(gq.selected, 0);
+
+        // Test with alphanumeric list items and bullet points
+        let letter_text = "What is your primary goal for this todo app?\n\
+                           * A) Learn/practice a specific stack\n\
+                           * B) Build a polished, portfolio-ready UI\n\
+                           * C) Solve a personal workflow need\n\
+                           * D) Explore full-stack architecture\n\n\
+                           Once you tell me, I'll recommend.";
+                           
+        let gq_letter = App::try_parse_grill_question(letter_text).unwrap();
+        assert_eq!(gq_letter.title, "What is your primary goal for this todo app?");
+        assert_eq!(gq_letter.options.len(), 6); // 4 options + 1 custom write-in + 1 skip
+        assert_eq!(gq_letter.options[0], "Learn/practice a specific stack");
+        assert_eq!(gq_letter.options[1], "Build a polished, portfolio-ready UI");
+        assert_eq!(gq_letter.options[2], "Solve a personal workflow need");
+        assert_eq!(gq_letter.options[3], "Explore full-stack architecture");
+        assert_eq!(gq_letter.options[4], "Write custom response...");
+        assert_eq!(gq_letter.options[5], "Skip (Dismiss dialog)");
+
+        // Test with plain unicode bullets
+        let unicode_bullet_text = "How do you want habit data stored and accessed across devices?\n\
+                                  • Local-only (offline-first) - store habits\n\
+                                  • Cloud sync with auth - use Supabase\n\
+                                  • Local-first with backup - habits\n\
+                                  Which of these fits your goal?";
+                                  
+        let gq_bullet = App::try_parse_grill_question(unicode_bullet_text).unwrap();
+        assert_eq!(gq_bullet.title, "How do you want habit data stored and accessed across devices?");
+        assert_eq!(gq_bullet.options.len(), 5); // 3 options + 1 custom write-in + 1 skip
+        assert_eq!(gq_bullet.options[0], "Local-only (offline-first) - store habits");
+        assert_eq!(gq_bullet.options[1], "Cloud sync with auth - use Supabase");
+        assert_eq!(gq_bullet.options[2], "Local-first with backup - habits");
     }
 }
