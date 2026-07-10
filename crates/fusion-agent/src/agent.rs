@@ -1,8 +1,10 @@
 use fusion_core::config::Config;
 use fusion_core::error::FusionError;
 use fusion_llm::client::{ChatMessage, ChatOptions, create_llm_client, LlmClient};
+use std::time::Instant;
 
 use crate::tools::{ToolRegistry, build_tool_schemas};
+
 
 /// Events emitted by the agent for the TUI to render.
 #[derive(Debug, Clone)]
@@ -454,6 +456,50 @@ impl Agent {
         &self.messages
     }
 
+    /// Summarize the conversation history and compact self.messages.
+    pub async fn compact(&mut self) -> Result<String, FusionError> {
+        if self.messages.len() <= 3 {
+            return Ok("History is already short. No compaction needed.".to_string());
+        }
+
+        // 1. Prepare messages to generate a summary
+        let mut summary_messages = self.messages.clone();
+        summary_messages.push(ChatMessage::user(
+            "Provide a concise summary of the conversation and actions taken so far in under 200 words. \
+             Focus on files edited, shell commands run, and current state."
+        ));
+
+        let options = ChatOptions {
+            messages: summary_messages,
+            tools: None,
+            temperature: Some(0.3),
+            max_tokens: Some(500),
+        };
+
+        // 2. Call the LLM to summarize
+        let response = self.llm.chat(options, None).await?;
+        let summary = response.content;
+
+        // 3. Keep system prompt (index 0) and the last 2 messages if they exist
+        let system_prompt = self.messages[0].clone();
+        let last_two = if self.messages.len() >= 3 {
+            self.messages[self.messages.len() - 2..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        // 4. Reconstruct history
+        let mut new_messages = vec![system_prompt];
+        new_messages.push(ChatMessage::system(format!(
+            "--- Preceding Conversation Summary (History Compacted) ---\n{}\n-----------------------------------------------------------",
+            summary
+        )));
+        new_messages.extend(last_two);
+
+        self.messages = new_messages;
+        Ok(summary)
+    }
+
     pub fn update_model(&mut self, model: &str) {
         self.llm.update_model(model);
     }
@@ -474,8 +520,46 @@ impl Agent {
             .unwrap_or_default();
         let acceptance_criteria = arguments["acceptance_criteria"].as_str().unwrap_or("");
 
+        let main_cwd = self.cwd.clone();
+        let use_worktree = std::path::Path::new(&main_cwd).join(".git").exists();
+
+        let (worktree_path, sub_cwd) = if use_worktree {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let wt_dir = home.join(".fusion").join("worktrees").join(format!("wt_{}", timestamp));
+            let wt_path_str = wt_dir.to_string_lossy().to_string();
+
+            let _ = tx.send(AgentEvent::TextDelta(format!(
+                "\n[Arbitrage] Creating isolated git worktree at {}...\n",
+                wt_path_str
+            )));
+
+            let wt_add = std::process::Command::new("git")
+                .args(["worktree", "add", "-d", &wt_path_str])
+                .current_dir(&main_cwd)
+                .output();
+
+            match wt_add {
+                Ok(out) if out.status.success() => {
+                    (Some(wt_dir), wt_path_str)
+                }
+                _ => {
+                    let _ = tx.send(AgentEvent::TextDelta(
+                        "\n[Arbitrage] Warning: Failed to create git worktree. Falling back to main workspace.\n".to_string()
+                    ));
+                    (None, main_cwd.clone())
+                }
+            }
+        } else {
+            (None, main_cwd.clone())
+        };
+
         let _ = tx.send(AgentEvent::TextDelta(format!(
-            "\n[Arbitrage] Spawning fast coder sub-agent (Files: {:?})...\n",
+            "\n[Arbitrage] Spawning fast coder sub-agent (Workspace: {}) (Files: {:?})...\n",
+            if worktree_path.is_some() { "Isolated Worktree" } else { "Main Workspace" },
             files
         )));
 
@@ -515,6 +599,9 @@ impl Agent {
         let max_rounds = 4;
         let mut sub_summary = String::new();
 
+        // Create a tool registry pointing to the sub_cwd (worktree or main)
+        let sub_tool_registry = ToolRegistry::new(&sub_cwd, None);
+
         for _round in 0..max_rounds {
             let options = ChatOptions {
                 messages: sub_messages.clone(),
@@ -527,6 +614,12 @@ impl Agent {
             let result = match small_llm.chat(options, None).await {
                 Ok(res) => res,
                 Err(e) => {
+                    if let Some(ref wt) = worktree_path {
+                        let _ = std::process::Command::new("git")
+                            .args(["worktree", "remove", "--force", &sub_cwd])
+                            .current_dir(&main_cwd)
+                            .output();
+                    }
                     return format!("Arbitrage sub-agent LLM error: {}", e);
                 }
             };
@@ -558,8 +651,7 @@ impl Agent {
                     tc.name, preview
                 )));
 
-                let output = self
-                    .tool_registry
+                let output = sub_tool_registry
                     .execute(&tc.name, &tc.arguments)
                     .await
                     .unwrap_or_else(|e| format!("Tool execution error: {}", e));
@@ -574,30 +666,81 @@ impl Agent {
             }
         }
 
-        // 5. Gather git diff
+        // 5. Gather git diff in sub workspace
         let diff_args = serde_json::json!({
             "command": "git diff",
             "timeout_secs": 10
         });
-        let git_diff = self
-            .tool_registry
+        let git_diff = sub_tool_registry
             .execute("run_command", &diff_args)
             .await
             .unwrap_or_else(|_| "Failed to get git diff".to_string());
 
-        // 6. Run verification command one last time
+        // 6. Run verification command inside sub workspace
         let verify_args = serde_json::json!({
             "command": acceptance_criteria,
             "timeout_secs": 60
         });
         let verification = if !acceptance_criteria.trim().is_empty() {
-            self.tool_registry
+            sub_tool_registry
                 .execute("run_command", &verify_args)
                 .await
                 .unwrap_or_else(|_| "Failed to run acceptance command".to_string())
         } else {
             "No acceptance command provided".to_string()
         };
+
+        // Determine if build/test passed
+        let is_verified = !verification.to_lowercase().contains("error") 
+            && !verification.to_lowercase().contains("failed")
+            && !verification.to_lowercase().contains("cannot find")
+            && !verification.to_lowercase().contains("cannot compile");
+
+        // 7. If we used worktree and it compiled/passed successfully, copy files back
+        if let Some(ref wt) = worktree_path {
+            if is_verified {
+                let _ = tx.send(AgentEvent::TextDelta(
+                    "\n[Arbitrage] Success! Verification passed. Copying files back to main workspace...\n".to_string()
+                ));
+                // Find modified files via git status --porcelain
+                let mut modified_files = Vec::new();
+                let status_args = serde_json::json!({
+                    "command": "git status --porcelain",
+                    "timeout_secs": 5
+                });
+                if let Ok(status_out) = sub_tool_registry.execute("run_command", &status_args).await {
+                    for line in status_out.lines() {
+                        let trimmed = line.trim();
+                        // M = Modified, A = Added, ?? = Untracked
+                        if trimmed.starts_with("M ") || trimmed.starts_with("A ") || trimmed.starts_with("?? ") {
+                            let file_path = trimmed[2..].trim();
+                            modified_files.push(file_path.to_string());
+                        }
+                    }
+                }
+
+                for file in &modified_files {
+                    let src = wt.join(file);
+                    let dest = std::path::Path::new(&main_cwd).join(file);
+                    if src.exists() {
+                        if let Some(parent) = dest.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::copy(&src, &dest);
+                    }
+                }
+            } else {
+                let _ = tx.send(AgentEvent::TextDelta(
+                    "\n[Arbitrage] Verification failed inside worktree. Main workspace remains untouched.\n".to_string()
+                ));
+            }
+
+            // Remove the worktree
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", "--force", &sub_cwd])
+                .current_dir(&main_cwd)
+                .output();
+        }
 
         format!(
             "Arbitrage Sub-Agent Execution Results:\n\n\
@@ -607,6 +750,7 @@ impl Agent {
             sub_summary, git_diff, verification
         )
     }
+
 
     fn get_small_model_id(&self) -> String {
         if let Some(ref m) = self.config.small_model {

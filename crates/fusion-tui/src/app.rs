@@ -58,7 +58,9 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/session", description: "Show current session ID", has_submenu: false },
     SlashCommand { name: "/sessions", description: "List saved sessions", has_submenu: false },
     SlashCommand { name: "/clear", description: "Clear message history", has_submenu: false },
+    SlashCommand { name: "/compact", description: "Summarize and compact message history", has_submenu: false },
     SlashCommand { name: "/grill", description: "Toggle design interview mode", has_submenu: false },
+
     SlashCommand { name: "/arbitrage", description: "Toggle model token arbitrage mode", has_submenu: false },
     SlashCommand { name: "/dq", description: "Clear or remove queued prompts", has_submenu: false },
     SlashCommand { name: "/theme", description: "Toggle light/dark theme", has_submenu: false },
@@ -1681,6 +1683,37 @@ impl App {
                     content: "Cleared.".to_string(),
                 });
             }
+            "/compact" => {
+                let agent = Arc::clone(&self.agent);
+                let event_tx = self.event_tx.clone();
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: "Summarizing and compacting history...".to_string(),
+                });
+                
+                tokio::spawn(async move {
+                    let mut agent = agent.lock().await;
+                    match agent.compact().await {
+                        Ok(summary) => {
+                            let _ = event_tx.send(crate::event::AppEvent::Agent(
+                                fusion_agent::agent::AgentEvent::FinalResponse(format!(
+                                    "Compacted successfully!\nSummary:\n{}",
+                                    summary
+                                ))
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(crate::event::AppEvent::Agent(
+                                fusion_agent::agent::AgentEvent::FinalResponse(format!(
+                                    "Failed to compact history: {}",
+                                    e
+                                ))
+                            ));
+                        }
+                    }
+                });
+            }
+
             "/dq" | "/dequeue" => {
                 if let Some(arg) = parts.get(1) {
                     if let Ok(idx) = arg.parse::<usize>() {
