@@ -167,273 +167,299 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
 }
 
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, theme: Theme) {
-    let mut lines: Vec<Line> = Vec::new();
     let wrap_width = (area.width as usize).saturating_sub(2);
     let width = wrap_width;
-    let mut is_first = true;
-    let mut prev_role = "";
 
-    for (msg_idx, msg) in app.messages.iter().enumerate() {
-        if !is_first {
-            let is_tool_transition = prev_role == "tool" && msg.role == "tool_result";
-            if !is_tool_transition {
-                lines.push(Line::from("")); // Single empty line separator between blocks
+    // Check if we can reuse the cached lines (only when the agent is NOT thinking/animating)
+    let mut cache = app.message_cache.borrow_mut();
+    let use_cache = if let Some((cached_width, cached_len, _)) = &*cache {
+        *cached_width == wrap_width && *cached_len == app.messages.len() && !app.is_thinking
+    } else {
+        false
+    };
+
+    let wrapped_lines = if use_cache {
+        let (_, _, cached_lines) = cache.as_ref().unwrap();
+        cached_lines.clone()
+    } else {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut is_first = true;
+        let mut prev_role = "";
+
+        for (msg_idx, msg) in app.messages.iter().enumerate() {
+            if !is_first {
+                let is_tool_transition = prev_role == "tool" && msg.role == "tool_result";
+                if !is_tool_transition {
+                    lines.push(Line::from("")); // Single empty line separator between blocks
+                }
             }
-        }
-        is_first = false;
-        prev_role = msg.role.as_str();
+            is_first = false;
+            prev_role = msg.role.as_str();
 
-        match msg.role.as_str() {
-            "user" => {
-                lines.push(Line::from("")); // Space above the block
-                
-                let border_color = match app.mode {
-                    AppMode::Plan => theme.italic_color, // Yellow/orange for Plan mode
-                    _ => theme.header_color,           // Teal/green for Normal/Yolo
-                };
-                let border_style = Style::default()
-                    .fg(border_color)
-                    .bg(theme.user_bg)
-                    .add_modifier(Modifier::BOLD);
-                let bg_style = Style::default().bg(theme.user_bg);
-                
-                // User box must fit within wrap_width (width - 2)
-                let wrap_width = width.saturating_sub(2);
-                let pad_width = wrap_width.saturating_sub(2);
-                
-                // Top padding line (full-width background + left border)
-                lines.push(Line::from(vec![
-                    Span::styled("┃ ", border_style),
-                    Span::styled(" ".repeat(pad_width), bg_style),
-                ]));
-                
-                // Content lines
-                for content_line in msg.content.lines() {
-                    let prefix = "  "; // 2 spaces padding on left
-                    let used_width = 2 + prefix.len() + content_line.len();
-                    let trail = if wrap_width > used_width {
-                        " ".repeat(wrap_width - used_width)
-                    } else {
-                        String::new()
+            match msg.role.as_str() {
+                "user" => {
+                    lines.push(Line::from("")); // Space above the block
+                    
+                    let border_color = match app.mode {
+                        AppMode::Plan => theme.italic_color, // Yellow/orange for Plan mode
+                        _ => theme.header_color,           // Teal/green for Normal/Yolo
                     };
+                    let border_style = Style::default()
+                        .fg(border_color)
+                        .bg(theme.user_bg)
+                        .add_modifier(Modifier::BOLD);
+                    let bg_style = Style::default().bg(theme.user_bg);
+                    
+                    // User box must fit within wrap_width (width - 2)
+                    let wrap_width = width.saturating_sub(2);
+                    let pad_width = wrap_width.saturating_sub(2);
+                    
+                    // Top padding line (full-width background + left border)
                     lines.push(Line::from(vec![
                         Span::styled("┃ ", border_style),
-                        Span::styled(
-                            format!("{}{}", prefix, content_line),
-                            Style::default().fg(theme.user_fg).bg(theme.user_bg),
-                        ),
-                        Span::styled(trail, bg_style),
+                        Span::styled(" ".repeat(pad_width), bg_style),
                     ]));
-                }
-                
-                // Bottom padding line (full-width background + left border)
-                lines.push(Line::from(vec![
-                    Span::styled("┃ ", border_style),
-                    Span::styled(" ".repeat(pad_width), bg_style),
-                ]));
-                
-                lines.push(Line::from("")); // Space below the block
-            }
-            "thought_time" => {
-                lines.push(Line::from(Span::styled(
-                    format!("  \u{25c6} Thought for {}", msg.content),
-                    Style::default().fg(theme.dim),
-                )));
-            }
-            "assistant" => {
-                let md_lines = render_markdown(msg.content.trim(), wrap_width, theme);
-                lines.extend(md_lines);
-            }
-            "turn_time" => {
-                lines.push(Line::from(Span::styled(
-                    format!("  Turn completed in {}.", msg.content),
-                    Style::default().fg(theme.dim),
-                )));
-            }
-            "tool" => {
-                let content = &msg.content;
-                let parsed = if content.starts_with("[tool] ") {
-                    let parts: Vec<&str> = content[7..].splitn(2, ' ').collect();
-                    if parts.len() == 2 {
-                        let name = parts[0];
-                        let args = parts[1];
-                        let display_cmd = if name == "run_command" {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                                v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args.to_string())
-                            } else {
-                                args.to_string()
-                            }
+                    
+                    // Content lines
+                    for content_line in msg.content.lines() {
+                        let prefix = "  "; // 2 spaces padding on left
+                        let used_width = 2 + prefix.len() + content_line.len();
+                        let trail = if wrap_width > used_width {
+                            " ".repeat(wrap_width - used_width)
                         } else {
-                            args.to_string()
+                            String::new()
                         };
-                        Some((name, display_cmd))
-                    } else {
-                        None
+                        lines.push(Line::from(vec![
+                            Span::styled("┃ ", border_style),
+                            Span::styled(
+                                format!("{}{}", prefix, content_line),
+                                Style::default().fg(theme.user_fg).bg(theme.user_bg),
+                            ),
+                            Span::styled(trail, bg_style),
+                        ]));
                     }
-                } else {
-                    None
-                };
-
-                if let Some((name, cmd)) = parsed {
-                    // 1. Top border: "  ┌── [tool: name]"
+                    
+                    // Bottom padding line (full-width background + left border)
+                    lines.push(Line::from(vec![
+                        Span::styled("┃ ", border_style),
+                        Span::styled(" ".repeat(pad_width), bg_style),
+                    ]));
+                    
+                    lines.push(Line::from("")); // Space below the block
+                }
+                "thought_time" => {
                     lines.push(Line::from(Span::styled(
-                        format!("  ┌── [tool: {}]", name),
+                        format!("  \u{25c6} Thought for {}", msg.content),
                         Style::default().fg(theme.dim),
                     )));
-
-                    // 2. Command line: "  │ $ cmd"
-                    lines.push(Line::from(vec![
-                        Span::styled("  │ ", Style::default().fg(theme.dim)),
-                        Span::styled(format!("$ {}", cmd), Style::default().fg(theme.code_fg).add_modifier(Modifier::BOLD)),
-                    ]));
-
-                    // Check if next is tool_result
-                    let is_next_tool_result = if let Some(next_msg) = app.messages.get(msg_idx + 1) {
-                        next_msg.role == "tool_result"
+                }
+                "assistant" => {
+                    let md_lines = render_markdown(msg.content.trim(), wrap_width, theme);
+                    lines.extend(md_lines);
+                }
+                "turn_time" => {
+                    lines.push(Line::from(Span::styled(
+                        format!("  Turn completed in {}.", msg.content),
+                        Style::default().fg(theme.dim),
+                    )));
+                }
+                "tool" => {
+                    let content = &msg.content;
+                    let parsed = if content.starts_with("[tool] ") {
+                        let parts: Vec<&str> = content[7..].splitn(2, ' ').collect();
+                        if parts.len() == 2 {
+                            let name = parts[0];
+                            let args = parts[1];
+                            let display_cmd = if name == "run_command" {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                                    v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args.to_string())
+                                } else {
+                                    args.to_string()
+                                }
+                            } else {
+                                args.to_string()
+                            };
+                            Some((name, display_cmd))
+                        } else {
+                            None
+                        }
                     } else {
-                        false
+                        None
                     };
 
-                    if !is_next_tool_result {
-                        lines.push(Line::from(Span::styled(
-                            "  └──",
-                            Style::default().fg(theme.dim),
-                        )));
-                    }
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::styled("  \u{2503}  ", Style::default().fg(theme.border)),
-                        Span::styled(content, Style::default().fg(theme.dim)),
-                    ]));
-                }
-            }
-            "tool_result" => {
-                let content = &msg.content;
-                let display_output = if content.contains(" → ") {
-                    let parts: Vec<&str> = content.splitn(2, " → ").collect();
-                    parts[1]
-                } else {
-                    content
-                };
-
-                for line in display_output.lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  │ ", Style::default().fg(theme.dim)),
-                        Span::styled(line.to_string(), Style::default().fg(theme.code_block_fg)),
-                    ]));
-                }
-                
-                lines.push(Line::from(Span::styled(
-                    "  └──",
-                    Style::default().fg(theme.dim),
-                )));
-            }
-            "thinking" => {
-                lines.push(Line::from(Span::styled(
-                    "  ┌── Thought Process",
-                    Style::default().fg(theme.dim),
-                )));
-                for line in msg.content.lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  │ ", Style::default().fg(theme.dim)),
-                        Span::styled(line.to_string(), Style::default().fg(theme.dim)),
-                    ]));
-                }
-                lines.push(Line::from(Span::styled(
-                    "  └──",
-                    Style::default().fg(theme.dim),
-                )));
-            }
-            "error" => {
-                lines.push(Line::from(Span::styled(
-                    format!("  error: {}", msg.content),
-                    Style::default().fg(Color::Red),
-                )));
-            }
-            "system" => {
-                if msg.content.starts_with("Todos:") {
-                    // "┃  ◆ Implementation Plan" header
-                    lines.push(Line::from(vec![
-                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
-                        Span::styled(
-                            "\u{25c6} Implementation Plan",
-                            Style::default()
-                                .fg(theme.bold_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]));
-                    lines.push(Line::from(""));
-                    for line in msg.content.lines().skip(1) {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() { continue; }
-
-                        let (icon, text) = if let Some(stripped) = trimmed.strip_prefix("✓") {
-                            (" \u{2713} ", stripped.trim_start())
-                        } else if let Some(stripped) = trimmed.strip_prefix("→") {
-                            (" \u{2192} ", stripped.trim_start())
-                        } else if let Some(stripped) = trimmed.strip_prefix("○") {
-                            (" \u{25cb} ", stripped.trim_start())
+                    if let Some((name, display_cmd)) = parsed {
+                        let header_style = Style::default().fg(theme.bold_color).add_modifier(Modifier::BOLD);
+                        
+                        // Parse tools we want to style as code blocks
+                        let block_tools = ["read_file", "write_file", "search_replace", "grep", "get_symbols", "run_command"];
+                        
+                        if block_tools.contains(&name) {
+                            let is_next_tool_result = msg_idx + 1 < app.messages.len() && app.messages[msg_idx + 1].role == "tool_result";
+                            let left_border = if is_next_tool_result { "\u{250f}\u{2501}" } else { "\u{250f}\u{2501}" };
+                            
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("  {} Calling: ", left_border), Style::default().fg(theme.border)),
+                                Span::styled(name.to_string(), header_style),
+                            ]));
+                            
+                            for arg_line in display_cmd.lines() {
+                                lines.push(Line::from(vec![
+                                    Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
+                                    Span::styled(arg_line.to_string(), Style::default().fg(theme.code_block_fg)),
+                                ]));
+                            }
                         } else {
-                            (" \u{25cb} ", trimmed)
-                        };
-
+                            lines.push(Line::from(vec![
+                                Span::styled("  \u{25c6} Tool Call: ", Style::default().fg(theme.border)),
+                                Span::styled(name.to_string(), header_style),
+                                Span::styled(format!(" ({})", display_cmd), Style::default().fg(theme.dim)),
+                            ]));
+                        }
+                    } else {
                         lines.push(Line::from(vec![
-                            Span::styled(" \u{2503}", Style::default().fg(theme.border)),
-                            Span::styled(icon, Style::default().fg(theme.bold_color)),
-                            Span::styled(text.to_string(), Style::default().fg(theme.label_color)),
+                            Span::styled("  \u{25c6} Tool Call: ", Style::default().fg(theme.border)),
+                            Span::styled(content.to_string(), Style::default().fg(theme.bold_color)),
                         ]));
                     }
-                } else if msg.content.contains("resumed session") {
-                    lines.push(Line::from(vec![
-                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
-                        Span::styled(
-                            "\u{25c6} Session Resumed",
-                            Style::default()
-                                .fg(theme.header_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]));
-                    for line in msg.content.lines() {
+                }
+                "tool_result" => {
+                    let prev_is_tool = msg_idx > 0 && app.messages[msg_idx - 1].role == "tool";
+                    
+                    if prev_is_tool {
+                        for line in msg.content.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
+                                Span::styled(line.to_string(), Style::default().fg(theme.code_block_fg)),
+                            ]));
+                        }
+                        lines.push(Line::from(Span::styled("  \u{2517}\u{2501}\u{2501}", Style::default().fg(theme.border))));
+                    } else if msg.content.contains("resumed session") {
                         lines.push(Line::from(vec![
                             Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
-                            Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                            Span::styled(
+                                "\u{25c6} Session Resumed",
+                                Style::default()
+                                    .fg(theme.header_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
                         ]));
+                        for line in msg.content.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                                Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                            ]));
+                        }
+                    } else {
+                        for line in msg.content.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                                Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                            ]));
+                        }
                     }
-                } else {
+                }
+                "thinking" => {
+                    lines.push(Line::from(Span::styled(
+                        "  \u{25c6} Thinking...",
+                        Style::default().fg(theme.dim),
+                    )));
                     for line in msg.content.lines() {
                         lines.push(Line::from(vec![
-                            Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                            Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
                             Span::styled(line.to_string(), Style::default().fg(theme.dim)),
                         ]));
                     }
                 }
-            }
-            _ => {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", msg.content),
-                    Style::default().fg(theme.dim),
-                )));
+                "error" => {
+                    lines.push(Line::from(Span::styled(
+                        format!("  error: {}", msg.content),
+                        Style::default().fg(Color::Red),
+                    )));
+                }
+                "system" => {
+                    if msg.content.starts_with("Todos:") {
+                        lines.push(Line::from(vec![
+                            Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                            Span::styled(
+                                "\u{25c6} Implementation Plan",
+                                Style::default()
+                                    .fg(theme.bold_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
+                        lines.push(Line::from(""));
+                        for line in msg.content.lines().skip(1) {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() { continue; }
+
+                            let (icon, text) = if let Some(stripped) = trimmed.strip_prefix("✓") {
+                                (" \u{2713} ", stripped.trim_start())
+                            } else if let Some(stripped) = trimmed.strip_prefix("→") {
+                                (" \u{2192} ", stripped.trim_start())
+                            } else if let Some(stripped) = trimmed.strip_prefix("○") {
+                                (" \u{25cb} ", stripped.trim_start())
+                            } else {
+                                (" \u{25cb} ", trimmed)
+                            };
+
+                            lines.push(Line::from(vec![
+                                Span::styled(" \u{2503}", Style::default().fg(theme.border)),
+                                Span::styled(icon, Style::default().fg(theme.bold_color)),
+                                Span::styled(text.to_string(), Style::default().fg(theme.label_color)),
+                            ]));
+                        }
+                    } else if msg.content.contains("resumed session") {
+                        lines.push(Line::from(vec![
+                            Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                            Span::styled(
+                                "\u{25c6} Session Resumed",
+                                Style::default()
+                                    .fg(theme.header_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
+                        for line in msg.content.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                                Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                            ]));
+                        }
+                    } else {
+                        for line in msg.content.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                                Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                            ]));
+                        }
+                    }
+                }
+                _ => {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", msg.content),
+                        Style::default().fg(theme.dim),
+                    )));
+                }
             }
         }
-    }
 
-    // Animated thinking loader if the agent is actively processing
-    if app.is_thinking {
-        let frame = (app.tick_count / 2) % 3;
-        let loader = match frame {
-            0 => " [ \u{25a0} \u{22c5} \u{22c5} ]", // " [ ■ ⬝ ⬝ ] "
-            1 => " [ \u{22c5} \u{25a0} \u{22c5} ]", // " [ ⬝ ■ ⬝ ] "
-            _ => " [ \u{22c5} \u{22c5} \u{25a0} ]", // " [ ⬝ ⬝ ■ ] "
-        };
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  \u{25c6} Thought process", Style::default().fg(theme.dim)),
-            Span::styled(loader, Style::default().fg(theme.header_color)),
-        ]));
-    }
+        if app.is_thinking {
+            let frame = (app.tick_count / 2) % 3;
+            let loader = match frame {
+                0 => " [ \u{25a0} \u{22c5} \u{22c5} ]",
+                1 => " [ \u{22c5} \u{25a0} \u{22c5} ]",
+                _ => " [ \u{22c5} \u{22c5} \u{25a0} ]",
+            };
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("  \u{25c6} Thought process", Style::default().fg(theme.dim)),
+                Span::styled(loader, Style::default().fg(theme.header_color)),
+            ]));
+        }
 
-    // Wrap lines manually to fit the viewport width
-    let wrapped_lines = wrap_lines(lines, wrap_width);
+        let wrapped = wrap_lines(lines, wrap_width);
+        *cache = Some((wrap_width, app.messages.len(), wrapped.clone()));
+        wrapped
+    };
 
     // Auto-scroll logic with internal mutability (via Cell)
     let visible_height = area.height as usize;

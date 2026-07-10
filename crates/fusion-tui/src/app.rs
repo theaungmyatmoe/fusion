@@ -1,8 +1,9 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
 use std::time::Instant;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use tokio::sync::{mpsc, Mutex};
+use ratatui::text::Line;
 
 use fusion_agent::agent::{Agent, AgentEvent};
 use fusion_core::config::Config;
@@ -106,6 +107,9 @@ pub struct App {
     pub submitted_text: Option<String>,
     pub editor_requested: Option<String>,
 
+    // Cache for TUI message lines to prevent typing delays: (wrap_width, messages_len, lines)
+    pub message_cache: RefCell<Option<(usize, usize, Vec<Line<'static>>)>>,
+
     agent: Arc<Mutex<Agent>>,
     session: Session,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -163,6 +167,7 @@ impl App {
             in_paste_burst: false,
             submitted_text: None,
             editor_requested: None,
+            message_cache: RefCell::new(None),
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -234,6 +239,7 @@ impl App {
             in_paste_burst: false,
             submitted_text: None,
             editor_requested: None,
+            message_cache: RefCell::new(None),
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
