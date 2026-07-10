@@ -70,14 +70,17 @@ impl Agent {
                  3. Use search_replace for edits — it requires old_string to match exactly once for safety.\n\
                  4. Keep edits minimal, safe, and focused.\n\
                  5. Run tests or compilation steps via shell to verify correctness.\n\
-                 6. Use todo tools to track your progress visibly."
+                 6. Use todo tools to track your progress visibly.\n\n\
+                 IMPORTANT: When you have gathered enough information and made the needed changes, \n\
+                 you MUST provide a final text response summarizing your work. \n\
+                 Do not keep calling tools indefinitely — be efficient and wrap up."
             ));
         }
 
         self.messages.push(ChatMessage::user(user_message));
 
         let tool_schemas = build_tool_schemas();
-        let max_rounds = 10;
+        let max_rounds = 25;
 
         for round in 0..max_rounds {
             // Pacing delay to avoid triggering Cloudflare burst rate limits during tool use
@@ -85,11 +88,27 @@ impl Agent {
                 tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
             }
 
+            // Inject a wrap-up nudge when running low on rounds
+            if round == max_rounds - 2 {
+                self.messages.push(ChatMessage::system(
+                    "IMPORTANT: You are running low on remaining rounds. \
+                     Finish up your current work and provide a final text answer \
+                     summarizing what you have done. Do NOT call more tools unless absolutely necessary."
+                ));
+            }
+
+            // Boost max_tokens on final rounds so the model has enough budget to conclude
+            let max_tokens = if round >= max_rounds - 3 {
+                Some(16384)
+            } else {
+                None
+            };
+
             let options = ChatOptions {
                 messages: self.messages.clone(),
                 tools: Some(tool_schemas.clone()),
                 temperature: Some(0.4),
-                max_tokens: None,
+                max_tokens,
             };
 
             let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -183,8 +202,53 @@ impl Agent {
             return Ok(());
         }
 
-        let msg = "Agent reached max rounds without final answer.".to_string();
-        let _ = tx.send(AgentEvent::FinalResponse(msg));
+        // Force one final LLM call WITHOUT tools to guarantee a text summary
+        self.messages.push(ChatMessage::system(
+            "You have exhausted all available tool rounds. \
+             You MUST now provide a final text response summarizing \
+             what you accomplished and any remaining work. \
+             Do NOT attempt any tool calls."
+        ));
+
+        let final_options = ChatOptions {
+            messages: self.messages.clone(),
+            tools: None, // No tools — forces text-only response
+            temperature: Some(0.4),
+            max_tokens: Some(16384),
+        };
+
+        let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel();
+        let tx_clone = tx.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Some(llm_event) = llm_rx.recv().await {
+                match llm_event {
+                    fusion_llm::client::LlmEvent::Thinking(chunk) => {
+                        let _ = tx_clone.send(AgentEvent::Thinking(chunk));
+                    }
+                    fusion_llm::client::LlmEvent::TextDelta(chunk) => {
+                        let _ = tx_clone.send(AgentEvent::TextDelta(chunk));
+                    }
+                }
+            }
+        });
+
+        match self.llm.chat(final_options, Some(llm_tx)).await {
+            Ok(result) => {
+                let _ = forwarder.await;
+                let final_text = if result.content.is_empty() {
+                    "Agent completed all rounds. No further summary available.".to_string()
+                } else {
+                    result.content
+                };
+                self.messages.push(ChatMessage::assistant(&final_text));
+                let _ = tx.send(AgentEvent::FinalResponse(final_text));
+            }
+            Err(_) => {
+                let _ = forwarder.await;
+                let msg = "Agent completed all available rounds.".to_string();
+                let _ = tx.send(AgentEvent::FinalResponse(msg));
+            }
+        }
         Ok(())
     }
 
