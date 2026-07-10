@@ -85,6 +85,23 @@ impl Agent {
                 }
             }
 
+            // Append specific mobile environment guidelines
+            if fusion_core::config::is_termux() {
+                sys_prompt.push_str(
+                    "\n\nTERMUX ENVIRONMENT PATHS:\n\
+                     - Standard Linux paths like /bin/bash, /bin/sh, or /tmp DO NOT EXIST natively in Termux.\n\
+                     - Always write shebangs in scripts as '#!/usr/bin/env bash' or '#!/usr/bin/env python' instead of hardcoded '/bin/bash'.\n\
+                     - Create temporary files inside the current directory or under the Termux prefix ($PREFIX/tmp) instead of /tmp.\n\
+                     - Termux utilities and binaries are located under the prefix '/data/data/com.termux/files/usr/'.\n"
+                );
+            } else if fusion_core::config::is_ish() {
+                sys_prompt.push_str(
+                    "\n\niSH (iOS ALPINE) ENVIRONMENT PATHS:\n\
+                     - Standard bash is not installed by default. Always write scripts using '#!/bin/sh' or install bash via 'apk add bash' first.\n\
+                     - Keep memory and disk writes low since iOS terminates long/heavy CPU-intensive processes.\n"
+                );
+            }
+
             self.messages.push(ChatMessage::system(sys_prompt));
         }
 
