@@ -278,18 +278,18 @@ async fn main() -> anyhow::Result<()> {
     // Interactive mode
     let termux = is_termux();
     let ish = is_ish();
-    let use_simple = cli.simple || (termux && !cli.tui) || (ish && !cli.tui);
+    let use_simple = cli.simple || (ish && !cli.tui);
 
     if use_simple {
         if ish {
             println!("fusion — iSH (iOS) emulator detected. Defaulting to lightweight REPL.");
-        } else if termux {
-            println!("fusion — Termux detected. Using lightweight REPL.");
+        } else {
+            println!("fusion — Using lightweight REPL.");
         }
         fusion_tui::simple::run_simple(&config).await?;
     } else {
         if termux {
-            eprintln!("Note: Running rich TUI on Termux. Use --simple if cramped.");
+            eprintln!("Note: Running rich TUI on Termux.");
         }
         fusion_tui::app::run_tui_with_session(&config, resume_session).await?;
     }
