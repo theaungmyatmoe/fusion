@@ -758,6 +758,22 @@ impl Agent {
                 return m.clone();
             }
         }
-        "@cf/zai-org/glm-4.7-flash".to_string()
+
+        // Dynamically choose based on active provider
+        match self.config.provider {
+            fusion_core::config::Provider::Xai => {
+                "grok-3-mini".to_string()
+            }
+            fusion_core::config::Provider::OpenAi => {
+                "gpt-4o-mini".to_string()
+            }
+            fusion_core::config::Provider::Cloudflare => {
+                "@cf/zai-org/glm-4.7-flash".to_string()
+            }
+            _ => {
+                // Absolute fallback: use the main model itself!
+                self.config.model.clone()
+            }
+        }
     }
 }
