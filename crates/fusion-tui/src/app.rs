@@ -110,6 +110,9 @@ pub struct App {
     // Cache for TUI message lines to prevent typing delays: (wrap_width, messages_len, lines)
     pub message_cache: RefCell<Option<(usize, usize, Vec<Line<'static>>)>>,
 
+    // Queued user prompts to execute sequentially
+    pub queued_prompts: Vec<String>,
+
     agent: Arc<Mutex<Agent>>,
     session: Session,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -168,6 +171,7 @@ impl App {
             submitted_text: None,
             editor_requested: None,
             message_cache: RefCell::new(None),
+            queued_prompts: Vec::new(),
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -240,6 +244,7 @@ impl App {
             submitted_text: None,
             editor_requested: None,
             message_cache: RefCell::new(None),
+            queued_prompts: Vec::new(),
             agent: Arc::new(Mutex::new(Agent::new(config, cwd))),
             session,
             event_tx,
@@ -306,9 +311,10 @@ impl App {
                 }
                 self.is_thinking = false;
                 self.remove_thinking();
+                self.queued_prompts.clear();
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Execution interrupted by user.".to_string(),
+                    content: "Execution interrupted by user. Queue cleared.".to_string(),
                 });
                 if let Some(text) = self.submitted_text.take() {
                     self.input = text;
@@ -320,7 +326,15 @@ impl App {
                 self.should_quit = true;
                 return;
             } else if key.code == KeyCode::Enter {
-                // Ignore Enter submission key while the agent is running/thinking
+                let text = self.input.trim().to_string();
+                if !text.is_empty() {
+                    self.queued_prompts.push(text);
+                    self.input.clear();
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: format!("Prompt queued (#{}).", self.queued_prompts.len()),
+                    });
+                }
                 return;
             }
         }
@@ -843,6 +857,12 @@ impl App {
                     "Session completed successfully."
                 };
                 trigger_desktop_notification("Fusion Coder", summary);
+
+                // Process the next queued prompt if any!
+                if !self.queued_prompts.is_empty() {
+                    let next_prompt = self.queued_prompts.remove(0);
+                    self.handle_submit(next_prompt);
+                }
             }
             AgentEvent::TodoUpdate(todos) => {
                 let list: String = todos
@@ -884,7 +904,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /image      insert clipboard image (macOS)\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /quit       quit (session auto-saved)".to_string(),
+                    content: "Fusion commands:\n  /help       show all commands\n  /yolo       toggle auto-approve\n  /plan       enter plan mode\n  /model <n>  switch model (or use autocomplete)\n  /models     list available models\n  /max        set maximum token output\n  /high       set high token output\n  /normal     set normal token output\n  /status     current settings\n  /theme      toggle light/dark theme\n  /image      insert clipboard image (macOS)\n  /session    show session ID\n  /sessions   list saved sessions\n  /clear      clear messages\n  /dq [n]     clear queue or dequeue item n\n  /quit       quit (session auto-saved)".to_string(),
                 });
             }
             "/yolo" => {
@@ -945,6 +965,35 @@ impl App {
                     role: "system".to_string(),
                     content: "Cleared.".to_string(),
                 });
+            }
+            "/dq" | "/dequeue" => {
+                if let Some(arg) = parts.get(1) {
+                    if let Ok(idx) = arg.parse::<usize>() {
+                        if idx > 0 && idx <= self.queued_prompts.len() {
+                            let removed = self.queued_prompts.remove(idx - 1);
+                            self.messages.push(Message {
+                                role: "system".to_string(),
+                                content: format!("Removed from queue: \"{}\"", removed),
+                            });
+                        } else {
+                            self.messages.push(Message {
+                                role: "error".to_string(),
+                                content: format!("Invalid queue index: {}", idx),
+                            });
+                        }
+                    } else {
+                        self.messages.push(Message {
+                            role: "error".to_string(),
+                            content: format!("Usage: /dq <number>"),
+                        });
+                    }
+                } else {
+                    self.queued_prompts.clear();
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: "Cleared all queued prompts.".to_string(),
+                    });
+                }
             }
             "/session" | "/sid" => {
                 self.messages.push(Message {
@@ -1365,5 +1414,51 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_file(img_path);
         let _ = std::fs::remove_file(txt_path);
+    }
+
+    #[test]
+    fn test_task_queue() {
+        let config = Config {
+            model: "test-model".to_string(),
+            small_model: None,
+            yolo: false,
+            provider: fusion_core::config::Provider::Auto,
+            cloudflare_account_id: None,
+            api_key: String::new(),
+            base_url: String::new(),
+            config_path: None,
+            settings: std::collections::HashMap::new(),
+        };
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, event_tx);
+
+        assert!(app.queued_prompts.is_empty());
+
+        // Queue a prompt while is_thinking is true
+        app.is_thinking = true;
+        app.input = "first prompt".to_string();
+        let enter_key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        app.handle_key(enter_key);
+
+        assert!(app.input.is_empty());
+        assert_eq!(app.queued_prompts.len(), 1);
+        assert_eq!(app.queued_prompts[0], "first prompt");
+
+        // Queue a second prompt
+        app.input = "second prompt".to_string();
+        app.handle_key(enter_key);
+        assert_eq!(app.queued_prompts.len(), 2);
+
+        // Test /dq 1 (remove first item)
+        app.handle_slash("/dq 1");
+        assert_eq!(app.queued_prompts.len(), 1);
+        assert_eq!(app.queued_prompts[0], "second prompt");
+
+        // Test /dq (clear all remaining)
+        app.handle_slash("/dq");
+        assert!(app.queued_prompts.is_empty());
     }
 }

@@ -505,6 +505,18 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
             ]));
         }
 
+        // Draw queued prompts if any
+        if !app.queued_prompts.is_empty() {
+            lines.push(Line::from(""));
+            for (idx, prompt) in app.queued_prompts.iter().enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  #{} ", idx + 1), Style::default().fg(theme.bold_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(prompt.to_string(), Style::default().fg(theme.dim)),
+                    Span::styled(" (queued)", Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC)),
+                ]));
+            }
+        }
+
         let wrapped = wrap_lines(lines, wrap_width);
         *cache = Some((wrap_width, app.messages.len(), wrapped.clone()));
         wrapped
@@ -796,7 +808,11 @@ fn draw_hint(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let right_text = format!("{}{}{}", model_display, level_str, mode_str);
 
     let left_text = if app.is_thinking {
-        "  waiting for response...".to_string()
+        if app.queued_prompts.is_empty() {
+            "  waiting for response...".to_string()
+        } else {
+            format!("  waiting for response... ({} queued)", app.queued_prompts.len())
+        }
     } else {
         "  Enter:send  |  /help:commands  |  Ctrl+C:quit".to_string()
     };
