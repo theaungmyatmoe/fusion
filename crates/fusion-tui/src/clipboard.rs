@@ -187,7 +187,7 @@ pub fn edit_text_in_editor(seed: &str) -> Result<String, String> {
             }
         });
 
-    let temp_dir = env::temp_dir();
+    let temp_dir = fusion_core::config::fusion_temp_dir();
     let temp_file = temp_dir.join("fusion_message.md");
     if let Err(e) = fs::write(&temp_file, seed) {
         return Err(format!("Failed to write temp file: {}", e));

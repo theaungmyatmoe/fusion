@@ -16,6 +16,23 @@ curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/i
 
 > **Note** — The installer automatically detects your platform, checks for and installs missing dependencies (like `git`, `ripgrep`, and `ca-certificates` on Alpine/iSH or Termux), downloads the optimized precompiled binary, and registers it. On iOS (iSH), Fusion automatically falls back to a lightweight REPL interface.
 
+### Android (Termux) — no npm
+
+Fusion is a **single Rust binary**. You do **not** need Node/npm.
+
+```bash
+# Install prebuilt (recommended)
+curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
+
+# Writable temp (Termux system /tmp is broken — Fusion fixes this automatically)
+export TMPDIR="$PREFIX/tmp"
+mkdir -p "$TMPDIR"
+
+fusion --simple   # best on phones
+```
+
+If an agent command still hits `Permission denied` on `/tmp`, update to the latest Fusion (shell remaps `/tmp` → `$PREFIX/tmp`).
+
 ### Android — Secure Alpine Sandbox (Optional)
 
 To isolate Fusion's shell execution in a secure Alpine container (protecting your phone's directories from agent commands):

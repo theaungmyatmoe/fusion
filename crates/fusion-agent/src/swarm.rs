@@ -548,6 +548,11 @@ pub async fn run_sub_agent_standalone(
         persona.system_prompt, cwd, model_id
     );
 
+    // bun/pnpm over npm for all sub-agents that touch JS
+    sys_prompt.push_str(&fusion_core::config::js_package_manager_policy_prompt(
+        std::path::Path::new(cwd),
+    ));
+
     // Load any specialized local or global skills
     let skills = fusion_core::config::load_skills(cwd);
     if !skills.is_empty() {

@@ -14,9 +14,14 @@ pub mod use_skill;
 
 use std::path::{Path, PathBuf};
 
-/// Resolve the path and check that it stays within the `cwd` workspace directory.
-/// To protect against symlink attacks and path traversal, we canonicalize the path's
-/// existing ancestors and verify it doesn't escape `cwd`.
+/// Resolve a path for file tools with a **workspace jail** (not Zed's permission system).
+///
+/// Paths must stay under the project `cwd`, **or** under a small allowlist of
+/// Fusion/Termux-safe roots (writable temp, `~/.fusion`, `~/.config/fusion`).
+///
+/// This is *not* copied from Zed's ACP sandbox. It is Fusion's own path guard
+/// (added to stop `../` traversal). On Termux, blocking `$PREFIX/tmp` used to
+/// look like a "permission" failure — those roots are now allowlisted.
 pub fn resolve_path_safe(cwd: &str, main_cwd: Option<&str>, path_str: &str) -> Result<PathBuf, String> {
     let p = Path::new(path_str);
     let resolved = if p.is_absolute() {
@@ -34,24 +39,62 @@ pub fn resolve_path_safe(cwd: &str, main_cwd: Option<&str>, path_str: &str) -> R
         Path::new(cwd).join(path_str)
     };
 
-    let canonical_cwd = std::fs::canonicalize(cwd)
-        .map_err(|e| format!("Failed to canonicalize workspace root {}: {}", cwd, e))?;
+    // Prefer canonicalize; on Termux/odd mounts fall back to absolute normalize
+    // so we don't fail the whole tool with "Failed to canonicalize workspace".
+    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| normalize_path(Path::new(cwd)));
 
-    let mut current = resolved.as_path();
-    let mut canonical_ancestor = None;
+    let final_canonical_path = canonicalize_existing_prefix(&resolved);
+
+    if path_is_allowed(&final_canonical_path, &canonical_cwd) {
+        return Ok(final_canonical_path);
+    }
+
+    Err(format!(
+        "Path blocked (workspace jail, not OS permission): '{:?}' is outside project '{:?}'. \
+         Allowed: project tree, Fusion temp ({}), ~/.fusion, ~/.config/fusion. \
+         Use relative paths under the project; do not write to system /tmp.",
+        final_canonical_path,
+        canonical_cwd,
+        fusion_core::config::fusion_temp_dir().display()
+    ))
+}
+
+/// Collapse `.` / `..` without requiring the path to exist.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => normalized.push(c.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+/// Canonicalize as far as the path exists, then append the non-existing suffix.
+fn canonicalize_existing_prefix(resolved: &Path) -> PathBuf {
+    let mut current = resolved;
     let mut suffix = PathBuf::new();
 
     loop {
         if current.exists() {
             if let Ok(canonical) = std::fs::canonicalize(current) {
-                canonical_ancestor = Some(canonical);
-                break;
+                let mut out = canonical;
+                out.push(suffix);
+                return normalize_path(&out);
             }
         }
         if let Some(parent) = current.parent() {
             if let Some(name) = current.file_name() {
                 let mut new_suffix = PathBuf::from(name);
-                new_suffix.push(suffix);
+                new_suffix.push(&suffix);
                 suffix = new_suffix;
             }
             current = parent;
@@ -59,45 +102,46 @@ pub fn resolve_path_safe(cwd: &str, main_cwd: Option<&str>, path_str: &str) -> R
             break;
         }
     }
+    normalize_path(resolved)
+}
 
-    let final_canonical_path = match canonical_ancestor {
-        Some(mut ancestor) => {
-            ancestor.push(suffix);
-            let mut normalized = PathBuf::new();
-            for component in ancestor.components() {
-                match component {
-                    std::path::Component::ParentDir => {
-                        normalized.pop();
-                    }
-                    std::path::Component::CurDir => {}
-                    c => normalized.push(c.as_os_str()),
-                }
+/// Workspace root **or** Fusion/Termux helper roots.
+fn path_is_allowed(path: &Path, workspace: &Path) -> bool {
+    if path.starts_with(workspace) {
+        return true;
+    }
+    for root in allowed_extra_roots() {
+        if let Ok(canon) = std::fs::canonicalize(&root) {
+            if path.starts_with(&canon) {
+                return true;
             }
-            normalized
+        } else if path.starts_with(&root) {
+            return true;
         }
-        None => {
-            let mut normalized = PathBuf::new();
-            for component in resolved.components() {
-                match component {
-                    std::path::Component::ParentDir => {
-                        normalized.pop();
-                    }
-                    std::path::Component::CurDir => {}
-                    c => normalized.push(c.as_os_str()),
-                }
-            }
-            normalized
-        }
-    };
+    }
+    false
+}
 
-    if !final_canonical_path.starts_with(&canonical_cwd) {
-        return Err(format!(
-            "Path security violation: resolved path '{:?}' is outside workspace '{:?}'",
-            final_canonical_path, canonical_cwd
-        ));
+fn allowed_extra_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    // Writable temp (Termux $PREFIX/tmp or ~/.fusion/tmp) — never system /tmp
+    roots.push(fusion_core::config::fusion_temp_dir());
+
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".fusion"));
+        roots.push(home.join(".config").join("fusion"));
     }
 
-    Ok(final_canonical_path)
+    if fusion_core::config::is_termux() {
+        if let Ok(prefix) = std::env::var("PREFIX") {
+            roots.push(PathBuf::from(prefix).join("tmp"));
+        }
+        roots.push(PathBuf::from("/data/data/com.termux/files/usr/tmp"));
+        roots.push(PathBuf::from("/data/data/com.termux/files/home/.fusion"));
+    }
+
+    roots
 }
 
 
@@ -430,7 +474,8 @@ pub fn build_tool_schemas_for_persona(allowed_tools: &[&str]) -> Vec<serde_json:
 
 #[cfg(test)]
 mod tests {
-    use super::validate_arguments;
+    use super::{resolve_path_safe, validate_arguments};
+    use std::fs;
 
     #[test]
     fn rejects_empty_write_file_arguments_with_schema_feedback() {
@@ -442,5 +487,52 @@ mod tests {
         assert!(error.contains("path, content"));
         assert!(error.contains("Transport error: empty arguments"));
         assert!(error.contains("never retry with {}"));
+    }
+
+    #[test]
+    fn path_jail_allows_workspace_blocks_escape() {
+        let root = std::env::temp_dir().join(format!(
+            "fusion-path-jail-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        let cwd = root.to_str().unwrap();
+
+        let ok = resolve_path_safe(cwd, None, "src/main.rs").unwrap();
+        assert!(ok.ends_with("src/main.rs") || ok.to_string_lossy().contains("main.rs"));
+
+        let err = resolve_path_safe(cwd, None, "../../etc/passwd").unwrap_err();
+        assert!(
+            err.contains("workspace jail") || err.contains("outside"),
+            "unexpected err: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn path_jail_allows_fusion_temp() {
+        let root = std::env::temp_dir().join(format!(
+            "fusion-path-tmp-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.to_str().unwrap();
+
+        let tmp = fusion_core::config::fusion_temp_dir();
+        let _ = fs::create_dir_all(&tmp);
+        let target = tmp.join("agent-scratch.txt");
+        let path_str = target.to_string_lossy();
+
+        let resolved = resolve_path_safe(cwd, None, &path_str);
+        assert!(
+            resolved.is_ok(),
+            "fusion temp should be allowlisted: {:?}",
+            resolved.err()
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -64,6 +64,10 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Termux/Android: system /tmp is not writable. Point TMPDIR (and shell tools)
+    // at $PREFIX/tmp or ~/.fusion/tmp before anything else runs.
+    fusion_core::config::ensure_runtime_env();
+
     // In case the terminal was left in raw mode from a previous crashed run:
     let _ = crossterm::terminal::disable_raw_mode();
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);

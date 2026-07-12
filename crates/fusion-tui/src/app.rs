@@ -201,9 +201,11 @@ pub struct App {
     pub editor_requested: Option<String>,
 
     /// Cache for rendered message lines so typing stays snappy during agent streams.
-    /// Tuple: `(wrap_width, msg_count, content_fp, queue_len, lines_without_spinner)`.
-    /// Spinner is appended after the cache so it can animate without a full rebuild.
-    pub message_cache: RefCell<Option<(usize, usize, u64, usize, Vec<Line<'static>>)>>,
+    /// Tuple: `(wrap_width, msg_count, content_fp, queue_len, Arc<lines without spinner>)`.
+    /// Arc avoids cloning the full transcript on every keystroke.
+    /// Spinner is painted after the cache so it can animate without a full rebuild.
+    pub message_cache:
+        RefCell<Option<(usize, usize, u64, usize, Arc<Vec<Line<'static>>>)>>,
 
     // Queued user prompts to execute sequentially
     pub queued_prompts: Vec<String>,
@@ -770,15 +772,12 @@ impl App {
                 if trimmed.starts_with('/') {
                     // Fall through — normal Enter handling will call handle_submit → handle_slash
                 } else {
-                    // Queue regular prompts for later
+                    // Agent busy → queue like Grok / OpenCode (do not start a second turn)
                     let full_prompt = self.build_full_prompt();
-                    if !full_prompt.is_empty() {
-                        self.queued_prompts.push(full_prompt);
+                    let display = self.build_display_prompt();
+                    if !full_prompt.trim().is_empty() {
+                        self.enqueue_user_prompt(full_prompt, Some(display));
                         self.clear_input_state();
-                        self.messages.push(Message {
-                            role: "system".to_string(),
-                            content: format!("Prompt queued (#{}).", self.queued_prompts.len()),
-                        });
                     }
                     return;
                 }
@@ -1056,7 +1055,12 @@ impl App {
                             self.show_file_picker(&q);
                         }
                     }
-                } else {
+                } else if self.input.starts_with('/')
+                    || self.autocomplete_visible
+                    || self.autocomplete_mode != AutocompleteMode::Commands
+                {
+                    // Only rebuild slash/model pickers when relevant — plain chat
+                    // typing must not scan command lists every keystroke.
                     self.update_autocomplete();
                 }
             }
@@ -1631,6 +1635,32 @@ impl App {
             .unwrap_or(0);
     }
 
+    /// Enqueue a user prompt while the agent is busy (Grok / OpenCode style).
+    /// Returns the 1-based queue position.
+    fn enqueue_user_prompt(&mut self, text: String, display_text: Option<String>) -> usize {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return self.queued_prompts.len();
+        }
+        self.queued_prompts.push(text.clone());
+        let n = self.queued_prompts.len();
+        let preview = display_text.unwrap_or_else(|| text.clone());
+        let preview_short = if preview.chars().count() > 120 {
+            let s: String = preview.chars().take(117).collect();
+            format!("{}…", s)
+        } else {
+            preview
+        };
+        self.messages.push(Message {
+            role: "queue".to_string(),
+            content: format!(
+                "Queued (#{n}) — runs after the current turn\n{preview_short}\n\
+                 Tip: /dq to clear queue · /dq {n} to drop this item · Esc cancels the active turn (also clears queue)"
+            ),
+        });
+        n
+    }
+
     fn handle_submit(&mut self, text: String, display_text: Option<String>) {
         if text == "/edit" || text.starts_with("/edit ") {
             let seed = if text.starts_with("/edit ") {
@@ -1644,6 +1674,12 @@ impl App {
 
         if text.starts_with('/') {
             self.handle_slash(&text);
+            return;
+        }
+
+        // Double-send / send-while-busy → queue (same as Grok CLI & OpenCode)
+        if self.is_thinking {
+            self.enqueue_user_prompt(text, display_text);
             return;
         }
 
@@ -1850,7 +1886,17 @@ impl App {
 
                 // Process the next queued prompt if any (only if a grill modal is not active!)
                 if self.active_grill_question.is_none() && !self.queued_prompts.is_empty() {
+                    let remaining = self.queued_prompts.len();
                     let next_prompt = self.queued_prompts.remove(0);
+                    let left = remaining - 1;
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: if left == 0 {
+                            "Running next queued message…".to_string()
+                        } else {
+                            format!("Running next queued message… ({left} still waiting)")
+                        },
+                    });
                     self.handle_submit(next_prompt, None);
                 }
             }
@@ -2519,6 +2565,7 @@ pub async fn run_tui_with_session(
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
+    // tick_rate_ms = spinner / paste-burst cadence (not key poll latency)
     let (mut event_handler, event_tx) = EventHandler::new(100);
     let mut app = match resume_session {
         Some(session) => App::from_session(config, session, event_tx),
@@ -2528,7 +2575,9 @@ pub async fn run_tui_with_session(
     // Stream redraw throttle: agent tokens can arrive far faster than a terminal
     // can paint. Cap stream-only frames so typing stays responsive on Termux and
     // desktop. User input always forces an immediate redraw.
-    const STREAM_DRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+    // 50ms (~20fps) stream paint is enough for readable streaming and much cheaper
+    // on Termux than 30fps full-frame redraws.
+    const STREAM_DRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
     let mut last_draw = Instant::now();
     let mut needs_draw = true;
 
@@ -2544,34 +2593,44 @@ pub async fn run_tui_with_session(
             break;
         };
 
-        // Drain everything already queued so one frame can apply many tokens.
+        // Drain everything already queued so one frame can apply many tokens / keys.
         let mut batch = vec![first];
         batch.extend(event_handler.drain());
+        // Keep draining briefly if more keys arrive mid-batch (fast typists).
+        for _ in 0..8 {
+            if let Some(e) = event_handler.try_next() {
+                batch.push(e);
+            } else {
+                break;
+            }
+        }
         let mut batch = coalesce_events(batch);
 
         // Process user input first within the batch for snappy typing feedback.
-        batch.sort_by_key(|e| if e.is_user_input() { 0u8 } else { 1u8 });
+        // Avoid full sort when the batch is tiny (common typing path = 1 key).
+        if batch.len() > 1 {
+            batch.sort_by_key(|e| if e.is_user_input() { 0u8 } else { 1u8 });
+        }
 
         let mut saw_user_input = false;
         let mut saw_non_stream = false;
         let mut saw_stream = false;
+        let mut saw_spinner_tick = false;
 
         for event in batch {
-            if event.is_user_input() {
-                saw_user_input = true;
-            } else if event.is_stream_chunk() {
-                saw_stream = true;
-            } else {
-                saw_non_stream = true;
+            match &event {
+                e if e.is_user_input() => saw_user_input = true,
+                AppEvent::Tick => {}
+                e if e.is_stream_chunk() => saw_stream = true,
+                AppEvent::Resize(_, _) => saw_non_stream = true,
+                _ => saw_non_stream = true,
             }
 
             match event {
                 AppEvent::Key(key) => app.handle_key(key),
                 AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
                 AppEvent::Agent(agent_event) => app.handle_agent_event(agent_event),
-                AppEvent::Resize(_, _) => {
-                    saw_non_stream = true;
-                }
+                AppEvent::Resize(_, _) => {}
                 AppEvent::Paste(text) => {
                     if let Ok(clip_text) = crate::clipboard::get_clipboard_text() {
                         app.handle_paste(clip_text);
@@ -2612,19 +2671,23 @@ pub async fn run_tui_with_session(
                 }
                 AppEvent::Tick => {
                     app.handle_tick();
+                    // Only animate when something is moving — never full-redraw
+                    // the transcript on idle ticks (was a major typing lag source).
+                    if app.is_thinking || app.in_paste_burst {
+                        saw_spinner_tick = true;
+                    }
                 }
             }
         }
 
         // Immediate redraw for keys / structural UI changes; throttle pure stream paint.
+        // Idle ticks alone never force a draw.
         if saw_user_input || saw_non_stream {
             needs_draw = true;
-        } else if saw_stream && last_draw.elapsed() >= STREAM_DRAW_INTERVAL {
+        } else if (saw_stream || saw_spinner_tick)
+            && last_draw.elapsed() >= STREAM_DRAW_INTERVAL
+        {
             needs_draw = true;
-        } else if saw_stream {
-            // Keep stream moving: if we skipped a frame, schedule on next opportunity
-            // via a short sleep-free path — next event (tick ~100ms) will redraw.
-            needs_draw = last_draw.elapsed() >= STREAM_DRAW_INTERVAL;
         }
 
         if let Some(seed) = app.editor_requested.take() {
@@ -2863,17 +2926,27 @@ mod tests {
         assert!(app.input.is_empty());
         assert_eq!(app.queued_prompts.len(), 1);
         assert_eq!(app.queued_prompts[0], "first prompt");
+        assert!(
+            app.messages.iter().any(|m| m.role == "queue"),
+            "should show queue status message"
+        );
 
-        // Queue a second prompt
+        // Queue a second prompt via Enter while busy
         app.input = "second prompt".to_string();
         app.last_key_time = None;
         app.handle_key(enter_key);
         assert_eq!(app.queued_prompts.len(), 2);
 
-        // Test /dq 1 (remove first item)
+        // Defense in depth: handle_submit while busy also queues
+        app.handle_submit("third via submit".to_string(), None);
+        assert_eq!(app.queued_prompts.len(), 3);
+        assert_eq!(app.queued_prompts[2], "third via submit");
+
+        // Test /dq 1 (remove first item) → second + third remain
         app.handle_slash("/dq 1");
-        assert_eq!(app.queued_prompts.len(), 1);
+        assert_eq!(app.queued_prompts.len(), 2);
         assert_eq!(app.queued_prompts[0], "second prompt");
+        assert_eq!(app.queued_prompts[1], "third via submit");
 
         // Test /dq (clear all remaining)
         app.handle_slash("/dq");

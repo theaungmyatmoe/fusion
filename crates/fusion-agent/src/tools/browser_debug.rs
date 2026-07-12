@@ -124,8 +124,11 @@ pub async fn execute(args: &serde_json::Value) -> Result<String, String> {
                 ));
             }
 
-            // Launch headless browser
-            let tmp_profile = format!("/tmp/fusion-browser-profile-{}", port);
+            // Launch headless browser (Termux-safe temp, not system /tmp)
+            let tmp_profile = fusion_core::config::fusion_temp_dir()
+                .join(format!("fusion-browser-profile-{}", port))
+                .to_string_lossy()
+                .to_string();
             let mut cmd = Command::new(&browser);
             cmd.args([
                 "--headless=new",
@@ -264,8 +267,9 @@ pub async fn execute(args: &serde_json::Value) -> Result<String, String> {
                 .output()
                 .await;
 
-            // Clean up temp profile
-            let tmp_profile = format!("/tmp/fusion-browser-profile-{}", port);
+            // Clean up temp profile (Termux-safe temp, not system /tmp)
+            let tmp_profile = fusion_core::config::fusion_temp_dir()
+                .join(format!("fusion-browser-profile-{}", port));
             let _ = tokio::fs::remove_dir_all(&tmp_profile).await;
 
             match kill_result {

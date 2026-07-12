@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::process::Stdio;
 use std::time::Duration;
 
+use fusion_core::config::{fusion_temp_dir, is_termux, remap_tmp_paths};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -36,17 +37,27 @@ pub async fn execute_streaming(
 
     let timeout_secs = args.timeout_secs.unwrap_or(30);
 
-    let command = if let Some(main) = main_cwd {
+    let mut command = if let Some(main) = main_cwd {
         args.command.replace(main, cwd)
     } else {
         args.command.clone()
     };
+
+    // Termux (and similar): remap /tmp → writable fusion temp dir and export TMPDIR.
+    let tmp_dir = fusion_temp_dir();
+    let tmp_str = tmp_dir.to_string_lossy().to_string();
+    if is_termux() || command.contains("/tmp") {
+        command = remap_tmp_paths(&command, &tmp_dir);
+    }
 
     let mut child = Command::new("sh");
     child
         .arg("-c")
         .arg(&command)
         .current_dir(cwd)
+        .env("TMPDIR", &tmp_str)
+        .env("TMP", &tmp_str)
+        .env("TEMP", &tmp_str)
         .env("PAGER", "cat")
         .env("EDITOR", "true")
         .env("GIT_EDITOR", "true")

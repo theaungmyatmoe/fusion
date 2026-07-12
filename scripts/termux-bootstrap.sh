@@ -1,36 +1,43 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Fusion — Termux bootstrap script
-# Builds the Rust binary natively on Termux (aarch64 Android)
+# Fusion — Termux bootstrap (NO npm / Node required)
+# Fusion is a single Rust binary. Prefer the prebuilt installer.
 set -euo pipefail
 
-echo "==> Fusion for Termux (Rust native binary)"
+echo "==> Fusion for Termux (single binary — no npm)"
 echo
+
+# Writable temp (Android /tmp is not usable)
+export PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
+mkdir -p "$TMPDIR" "$HOME/.fusion/tmp" 2>/dev/null || true
 
 pkg update -y || true
-pkg install -y git ripgrep rust
+# Runtime helpers only — NOT node/npm
+pkg install -y curl git ripgrep ca-certificates 2>/dev/null || true
+
+INSTALL_DIR="${PREFIX}/bin"
+mkdir -p "$INSTALL_DIR"
 
 echo
-echo "Clone:"
-echo "  git clone https://github.com/aungmyatmoe/zencode ~/.fusion"
-echo "  cd ~/.fusion"
+echo "Recommended: install prebuilt binary (fast, no compile, no npm):"
+echo "  curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh"
 echo
-echo "Build (takes a few minutes on first compile):"
-echo "  cargo build --release"
+echo "Or build from source (needs rust; slow on phones):"
+echo "  pkg install -y rust"
+echo "  git clone https://github.com/theaungmyatmoe/fusion ~/.fusion-src"
+echo "  cd ~/.fusion-src && cargo build --release"
+echo "  cp target/release/fusion \"\$PREFIX/bin/\""
 echo
 echo "Run:"
 echo "  export CLOUDFLARE_ACCOUNT_ID=your_id"
 echo "  export CLOUDFLARE_API_TOKEN=your_token"
-echo "  ./target/release/fusion"
+echo "  fusion --simple          # best on phones"
+echo "  fusion                   # full TUI"
 echo
-echo "Or copy to PATH:"
-echo "  cp target/release/fusion \$PREFIX/bin/"
-echo "  fusion"
+echo "Temp dir: \$TMPDIR=$TMPDIR  (never use /tmp on Termux)"
+echo "Config:   ~/.config/fusion/fusion.toml"
 echo
-echo "Modes:"
-echo "  fusion              # rich Ratatui TUI (default)"
-echo "  fusion --simple     # lightweight REPL (best on small screens)"
-echo "  fusion -p 'task'    # headless (non-interactive)"
-echo
-echo "Default model = Kimi 2.7 Code via Cloudflare Workers AI"
-echo "No local GPU needed. Open models like GLM supported via routing."
-echo "Use /help inside the REPL for commands."
+echo "Inside Fusion: /providers  →  Cloudflare  →  token then account ID"
+echo "Use /help for commands. Fusion does not need npm."

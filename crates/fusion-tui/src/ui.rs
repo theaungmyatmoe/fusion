@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -416,9 +418,9 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
         false
     };
 
-    let mut wrapped_lines = if use_cache {
-        let (_, _, _, _, cached_lines) = cache.as_ref().unwrap();
-        cached_lines.clone()
+    // Shared Arc so keystroke redraws do not deep-clone the full transcript.
+    let cached_lines: Arc<Vec<Line<'static>>> = if use_cache {
+        Arc::clone(&cache.as_ref().unwrap().4)
     } else {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut is_first = true;
@@ -899,6 +901,43 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
                         ]));
                     }
                 }
+                "queue" => {
+                    // Grok / OpenCode style: show queued user sends while agent is busy
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            " \u{2503}  ",
+                            Style::default().fg(Color::Rgb(234, 179, 8)),
+                        ),
+                        Span::styled(
+                            "\u{23F3} ",
+                            Style::default().fg(Color::Rgb(234, 179, 8)),
+                        ),
+                        Span::styled(
+                            "Queued",
+                            Style::default()
+                                .fg(Color::Rgb(234, 179, 8))
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                    for (i, line) in msg.content.lines().enumerate() {
+                        let style = if i == 0 {
+                            Style::default()
+                                .fg(Color::Rgb(250, 204, 21))
+                                .add_modifier(Modifier::BOLD)
+                        } else if line.starts_with("Tip:") {
+                            Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC)
+                        } else {
+                            Style::default().fg(theme.label_color)
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                " \u{2503}  ",
+                                Style::default().fg(Color::Rgb(234, 179, 8)),
+                            ),
+                            Span::styled(line.to_string(), style),
+                        ]));
+                    }
+                }
                 "error" => {
                     lines.push(Line::from(Span::styled(
                         format!("  error: {}", msg.content),
@@ -982,14 +1021,43 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
             }
         }
 
-        // Draw queued prompts if any (part of cache key via queue_len)
+        // Live queue strip (Grok/OpenCode-style) — always visible while waiting
         if !app.queued_prompts.is_empty() {
             lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " \u{2503}  ",
+                    Style::default().fg(Color::Rgb(234, 179, 8)),
+                ),
+                Span::styled(
+                    format!(
+                        "Queue · {} waiting · /dq to clear",
+                        app.queued_prompts.len()
+                    ),
+                    Style::default()
+                        .fg(Color::Rgb(234, 179, 8))
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
             for (idx, prompt) in app.queued_prompts.iter().enumerate() {
+                let preview: String = prompt.chars().take(80).collect();
+                let preview = if prompt.chars().count() > 80 {
+                    format!("{preview}…")
+                } else {
+                    preview
+                };
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  #{} ", idx + 1), Style::default().fg(theme.bold_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(prompt.to_string(), Style::default().fg(theme.dim)),
-                    Span::styled(" (queued)", Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC)),
+                    Span::styled(
+                        " \u{2503}  ",
+                        Style::default().fg(Color::Rgb(234, 179, 8)),
+                    ),
+                    Span::styled(
+                        format!("#{:<2} ", idx + 1),
+                        Style::default()
+                            .fg(Color::Rgb(250, 204, 21))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(preview, Style::default().fg(theme.label_color)),
                 ]));
             }
         }
@@ -997,25 +1065,27 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
         // Cache WITHOUT the spinner so pure keystrokes reuse this work while the
         // spinner still animates via tick-driven redraws below.
         let wrapped = wrap_lines(lines, wrap_width);
+        let arc = Arc::new(wrapped);
         *cache = Some((
             wrap_width,
             app.messages.len(),
             content_fp,
             queue_len,
-            wrapped.clone(),
+            Arc::clone(&arc),
         ));
-        wrapped
+        arc
     };
 
     // Spinner is outside the cache so animation does not force a full rebuild.
-    if app.is_thinking {
-        wrapped_lines.push(Line::from(""));
-        wrapped_lines.push(draw_gradient_spinner(app, &theme));
-    }
+    // Only clone the transcript when the spinner must be appended.
+    let total_lines = if app.is_thinking {
+        cached_lines.len() + 2
+    } else {
+        cached_lines.len()
+    };
 
     // Auto-scroll logic with internal mutability (via Cell)
     let visible_height = area.height as usize;
-    let total_lines = wrapped_lines.len();
     let max_scroll = total_lines.saturating_sub(visible_height);
 
     if app.auto_scroll.get() {
@@ -1028,10 +1098,32 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
         }
     }
 
-    let messages_widget = Paragraph::new(wrapped_lines)
-        .block(Block::default().borders(Borders::NONE))
-        .scroll((app.scroll_offset.get() as u16, 0));
+    // Only materialize the *visible* window (typically ~20–50 lines), not the
+    // entire transcript. Cloning thousands of history lines every keystroke was
+    // the main typing lag source on long sessions / Termux.
+    let scroll_y = app.scroll_offset.get();
+    let mut visible: Vec<Line<'static>> =
+        Vec::with_capacity(visible_height.saturating_add(2));
+    let end = (scroll_y + visible_height).min(cached_lines.len());
+    if scroll_y < cached_lines.len() {
+        visible.extend(cached_lines[scroll_y..end].iter().cloned());
+    }
+    if app.is_thinking {
+        // Spinner sits at the end of the full transcript; show it when scrolled to bottom.
+        let spinner_at = cached_lines.len(); // blank + spinner after cache
+        if scroll_y + visible_height > spinner_at {
+            if visible.len() < visible_height {
+                visible.push(Line::from(""));
+            }
+            if visible.len() < visible_height {
+                visible.push(draw_gradient_spinner(app, &theme));
+            }
+        }
+    }
 
+    let messages_widget = Paragraph::new(visible)
+        .block(Block::default().borders(Borders::NONE));
+    // Already sliced to viewport — no Paragraph-level scroll needed.
     frame.render_widget(messages_widget, area);
 }
 
@@ -1205,6 +1297,45 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
             .add_modifier(Modifier::BOLD),
     ));
     visual_len += 2;
+
+    // Fast path: plain chat text (no @ / tags / credential mask) — avoid the
+    // full scanner that allocates per-token strings on every keystroke.
+    let plain_fast = !app.in_paste_burst
+        && app.credential_setup.is_none()
+        && !app.input.contains('@')
+        && !app.input.contains('[');
+
+    if plain_fast {
+        let max_width = area.width.saturating_sub(2) as usize;
+        let prompt_w = 2usize; // "❯ "
+        let input_chars = app.input.chars().count();
+        visual_len = (prompt_w + input_chars) as u16;
+        let (shown, cursor_col) = if prompt_w + input_chars <= max_width {
+            (app.input.as_str().to_string(), visual_len)
+        } else {
+            let skip = prompt_w + input_chars - max_width;
+            let shown: String = app.input.chars().skip(skip).collect();
+            (shown, max_width as u16)
+        };
+        spans.push(Span::styled(
+            shown,
+            Style::default()
+                .fg(theme.label_color)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let input_widget = Paragraph::new(Line::from(spans))
+            .block(input_block)
+            .style(Style::default().fg(theme.label_color));
+        frame.render_widget(input_widget, area);
+        if !app.is_thinking {
+            let cursor_x = area.x + 1 + cursor_col;
+            let cursor_y = area.y + 1;
+            if cursor_x < area.x + area.width.saturating_sub(1) {
+                frame.set_cursor_position((cursor_x, cursor_y));
+            }
+        }
+        return;
+    }
 
     // Chronological scanner to parse and style tags/text inside app.input
     // Mask secrets while collecting credentials so tokens don't linger on-screen.

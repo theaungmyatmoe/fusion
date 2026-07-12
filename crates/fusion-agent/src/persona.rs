@@ -33,6 +33,7 @@ Strategy:
 2. Read key sections (not entire files)
 3. Identify types, interfaces, key functions
 4. Note dependencies between files
+5. Note package manager from lockfiles (bun.lock / pnpm-lock.yaml / yarn.lock / package-lock.json) — prefer bun/pnpm over npm when reporting install/run commands
 
 Output format:
 
@@ -45,6 +46,9 @@ Critical types, interfaces, or functions (paste actual code):
 
 ## Architecture
 Brief explanation of how the pieces connect.
+
+## Package manager
+Which lockfile/tool to use (bun > pnpm > yarn > npm).
 
 ## Start Here
 Which file to look at first and why.
@@ -74,6 +78,12 @@ INSTRUCTIONS:
 5. Do not run the full acceptance command; the parent runs it once after your edits.
 6. You may run a small targeted check only when it directly helps complete an edit.
 7. Once the edits are complete, provide a concise summary and finish.
+
+JS PACKAGE MANAGERS (MANDATORY):
+- Prefer bun, then pnpm, then yarn. npm is LAST RESORT (slow).
+- Respect lockfiles: bun.lock/bun.lockb → bun; pnpm-lock.yaml → pnpm; yarn.lock → yarn; package-lock.json → npm only then.
+- Never default to `npm install` / `npx` when bun or pnpm can be used.
+- Non-interactive only (-y / --yes).
 
 Output format when finished:
 

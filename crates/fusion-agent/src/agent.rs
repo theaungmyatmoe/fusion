@@ -139,7 +139,9 @@ impl Agent {
                  6. Use todo tools to track your progress visibly.\n\n\
                  RUNNING SHELL COMMANDS:\n\
                  - Always run installation and scaffolding commands in NON-INTERACTIVE mode (using -y, --yes, or --non-interactive).\n\
-                 - For example, instead of 'npm create vite@latest', run 'npm create vite@latest -y -- --template react'.\n\
+                 - JS package managers: follow JS PACKAGE MANAGER POLICY below. Prefer bun/pnpm — NEVER default to slow npm/npx.\n\
+                 - Example (good): 'bun create vite . --template react-ts' or 'pnpm create vite . --template react-ts'.\n\
+                 - Example (bad): 'npm create vite@latest' or bare 'npx' when bun/pnpm exist.\n\
                  - If a command waits for stdin/user input, it will HANG and TIMEOUT (e.g. after 120 seconds). Make sure there are no prompts.\n\n\
                  TASTE ENGINEERING (Anti-Slop Frontend Guidelines):\n\
                  When creating web landing pages, portfolios, or frontend interfaces:\n\
@@ -154,6 +156,11 @@ impl Agent {
                  Do not keep calling tools indefinitely — be efficient and wrap up.",
                  self.config.model
             );
+                // Force bun/pnpm over npm (models love npm because of training data — override that)
+                sys_prompt.push_str(&fusion_core::config::js_package_manager_policy_prompt(
+                    std::path::Path::new(&self.cwd),
+                ));
+
                 // Load any specialized local or global skills (dynamically loaded via use_skill tool)
                 let skills = fusion_core::config::load_skills(&self.cwd);
                 if !skills.is_empty() {
@@ -261,13 +268,19 @@ impl Agent {
                                  - UI animations must remain under 300ms (100-160ms for button press, 150-250ms for dropdowns/selects, 200-500ms for modals/drawers).\n");
 
                 if fusion_core::config::is_termux() {
-                    sys_prompt.push_str(
+                    let fusion_tmp = fusion_core::config::fusion_temp_dir();
+                    sys_prompt.push_str(&format!(
                     "\n\nTERMUX ENVIRONMENT PATHS:\n\
-                     - Standard Linux paths like /bin/bash, /bin/sh, or /tmp DO NOT EXIST natively in Termux.\n\
-                     - Always write shebangs in scripts as '#!/usr/bin/env bash' or '#!/usr/bin/env python' instead of hardcoded '/bin/bash'.\n\
-                     - Create temporary files inside the current directory or under the Termux prefix ($PREFIX/tmp) instead of /tmp.\n\
-                     - Termux utilities and binaries are located under the prefix '/data/data/com.termux/files/usr/'.\n"
-                );
+                     - Standard Linux paths like /bin/bash, /bin/sh, or /tmp DO NOT EXIST natively in Termux (or /tmp is permission-denied).\n\
+                     - Always write shebangs as '#!/usr/bin/env bash' or '#!/usr/bin/env python' — never hardcode '/bin/bash'.\n\
+                     - NEVER write temporary files under /tmp. Use TMPDIR or this writable path: {}.\n\
+                     - Prefer: mktemp -d \"$TMPDIR/fusion.XXXXXX\" or files under the project cwd.\n\
+                     - Do NOT use npm/npx for Fusion itself — Fusion is a single Rust binary (no Node required).\n\
+                     - Termux binaries live under $PREFIX (usually /data/data/com.termux/files/usr/).\n\
+                     - Shell tool auto-remaps /tmp → {} and exports TMPDIR for child processes.\n",
+                        fusion_tmp.display(),
+                        fusion_tmp.display()
+                    ));
                     sys_prompt.push_str("\n\nTERMUX API SKILL AND BEST PRACTICES:\n");
                     sys_prompt.push_str(TERMUX_API_SKILL);
                 } else if fusion_core::config::is_ish() {

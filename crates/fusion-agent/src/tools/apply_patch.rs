@@ -309,33 +309,8 @@ fn resolve_workspace_path(
     main_cwd: Option<&str>,
     path: &str,
 ) -> Result<PathBuf, String> {
-    let requested = Path::new(path);
-    let mapped = if requested.is_absolute() {
-        if let Some(main) = main_cwd {
-            requested
-                .strip_prefix(main)
-                .map(|relative| Path::new(cwd).join(relative))
-                .unwrap_or_else(|_| requested.to_path_buf())
-        } else {
-            requested.to_path_buf()
-        }
-    } else {
-        Path::new(cwd).join(requested)
-    };
-
-    let root = fs::canonicalize(cwd)
-        .map_err(|e| format!("apply_patch: invalid workspace {}: {}", cwd, e))?;
-    let parent = mapped.parent().unwrap_or(Path::new(cwd));
-    let canonical_parent = if parent.exists() {
-        fs::canonicalize(parent)
-            .map_err(|e| format!("apply_patch: invalid path {}: {}", path, e))?
-    } else {
-        root.join(parent.strip_prefix(cwd).unwrap_or(parent))
-    };
-    if !canonical_parent.starts_with(&root) {
-        return Err(format!("apply_patch: path escapes workspace: {}", path));
-    }
-    Ok(mapped)
+    // Share the same jail + Termux allowlist as read/write/search_replace.
+    super::resolve_path_safe(cwd, main_cwd, path)
 }
 
 #[cfg(test)]

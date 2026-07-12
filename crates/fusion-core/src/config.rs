@@ -799,6 +799,282 @@ pub fn is_ish() -> bool {
     std::path::Path::new("/proc/ish").exists()
 }
 
+/// Return a **writable** temporary directory for Fusion and child processes.
+///
+/// On Termux/Android, system `/tmp` is missing or permission-denied. Prefer:
+/// 1. Existing writable `$TMPDIR`
+/// 2. Termux `$PREFIX/tmp`
+/// 3. `~/.fusion/tmp`
+/// 4. `std::env::temp_dir()` if writable
+/// 5. `./.fusion-tmp` under cwd (last resort)
+pub fn fusion_temp_dir() -> PathBuf {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(tdir) = env::var("TMPDIR") {
+        let p = PathBuf::from(tdir.trim());
+        if !p.as_os_str().is_empty() {
+            candidates.push(p);
+        }
+    }
+
+    if is_termux() {
+        if let Ok(prefix) = env::var("PREFIX") {
+            candidates.push(PathBuf::from(prefix).join("tmp"));
+        }
+        // Hardcoded Termux prefix fallback (PREFIX is usually set)
+        candidates.push(PathBuf::from("/data/data/com.termux/files/usr/tmp"));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".fusion").join("tmp"));
+    }
+
+    let std_tmp = env::temp_dir();
+    // On Termux, Rust may still report `/tmp` which is not writable — only try if different.
+    if !candidates.iter().any(|c| c == &std_tmp) {
+        candidates.push(std_tmp);
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join(".fusion-tmp"));
+    }
+
+    for cand in &candidates {
+        if ensure_writable_dir(cand) {
+            return cand.clone();
+        }
+    }
+
+    // Absolute last resort — may still fail to write, but path is consistent.
+    PathBuf::from("/data/data/com.termux/files/usr/tmp")
+}
+
+fn ensure_writable_dir(path: &Path) -> bool {
+    if fs::create_dir_all(path).is_err() {
+        return false;
+    }
+    let probe = path.join(format!(".fusion-write-test-{}", std::process::id()));
+    match fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Configure process environment so Fusion **and** shell tools never rely on
+/// a broken system `/tmp` (especially Termux).
+///
+/// Safe to call multiple times. Call once at CLI startup.
+pub fn ensure_runtime_env() {
+    let tmp = fusion_temp_dir();
+    let tmp_str = tmp.to_string_lossy();
+
+    // Force child processes (npm, mktemp, rustc, etc.) onto a writable tmp.
+    env::set_var("TMPDIR", tmp_str.as_ref());
+    env::set_var("TMP", tmp_str.as_ref());
+    env::set_var("TEMP", tmp_str.as_ref());
+
+    if is_termux() {
+        // Ensure PREFIX-based tools are discoverable.
+        if let Ok(prefix) = env::var("PREFIX") {
+            let bin = format!("{}/bin", prefix.trim_end_matches('/'));
+            let path = env::var("PATH").unwrap_or_default();
+            if !path.split(':').any(|p| p == bin) {
+                env::set_var("PATH", format!("{}:{}", bin, path));
+            }
+        }
+        // Prefer Termux home if HOME is wrong/empty.
+        if env::var("HOME").map(|h| h.is_empty() || h == "/").unwrap_or(true) {
+            if let Some(home) = dirs::home_dir() {
+                env::set_var("HOME", home);
+            }
+        }
+    }
+}
+
+/// Rewrite bare Linux `/tmp` paths to the Fusion-writable temp dir.
+/// Used for agent shell commands on Termux so `mktemp /tmp/...` etc. work.
+pub fn remap_tmp_paths(command: &str, tmp_dir: &Path) -> String {
+    let real = tmp_dir.to_string_lossy();
+    let real = real.trim_end_matches('/');
+    if real.is_empty() || real == "/tmp" {
+        return command.to_string();
+    }
+
+    let mut out = String::with_capacity(command.len());
+    let chars: Vec<char> = command.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        // Match "/tmp" at a path boundary (start or after non-filename char),
+        // not mid-word (e.g. not "foo/tmpdir").
+        if chars[i] == '/'
+            && i + 4 <= chars.len()
+            && chars[i + 1] == 't'
+            && chars[i + 2] == 'm'
+            && chars[i + 3] == 'p'
+        {
+            let before_ok = i == 0 || !is_path_token_char(chars[i - 1]);
+            let after_idx = i + 4;
+            let after = chars.get(after_idx).copied();
+            let after_ok = match after {
+                None => true,
+                Some(c) => !c.is_ascii_alphanumeric() && c != '_',
+            };
+            if before_ok && after_ok {
+                out.push_str(real);
+                i = after_idx;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn is_path_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+/// Preferred JS package manager for a workspace (and fallback when none is locked).
+///
+/// Order when no lockfile: **bun → pnpm → yarn → npm** (npm is last resort — slow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsPackageManager {
+    Bun,
+    Pnpm,
+    Yarn,
+    Npm,
+}
+
+impl JsPackageManager {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JsPackageManager::Bun => "bun",
+            JsPackageManager::Pnpm => "pnpm",
+            JsPackageManager::Yarn => "yarn",
+            JsPackageManager::Npm => "npm",
+        }
+    }
+
+    /// Install dependencies for this package manager (non-interactive).
+    pub fn install_cmd(self) -> &'static str {
+        match self {
+            JsPackageManager::Bun => "bun install",
+            JsPackageManager::Pnpm => "pnpm install",
+            JsPackageManager::Yarn => "yarn install --non-interactive",
+            JsPackageManager::Npm => "npm install --yes",
+        }
+    }
+
+    /// Run a package.json script, e.g. `dev` / `build` / `test`.
+    pub fn run_script(self, script: &str) -> String {
+        match self {
+            JsPackageManager::Bun => format!("bun run {}", script),
+            JsPackageManager::Pnpm => format!("pnpm run {}", script),
+            JsPackageManager::Yarn => format!("yarn {}", script),
+            JsPackageManager::Npm => format!("npm run {}", script),
+        }
+    }
+
+    /// Execute a one-off binary (prefer over npx).
+    pub fn exec(self, bin_and_args: &str) -> String {
+        match self {
+            JsPackageManager::Bun => format!("bunx {}", bin_and_args),
+            JsPackageManager::Pnpm => format!("pnpm dlx {}", bin_and_args),
+            JsPackageManager::Yarn => format!("yarn dlx {}", bin_and_args),
+            JsPackageManager::Npm => format!("npx --yes {}", bin_and_args),
+        }
+    }
+}
+
+impl std::fmt::Display for JsPackageManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Detect the JS package manager from lockfiles in `cwd` (and parents up to 3 levels).
+///
+/// Lockfile wins. If none: prefer **bun**, then **pnpm**, then yarn, **npm last**.
+pub fn detect_js_package_manager(cwd: &Path) -> JsPackageManager {
+    let mut dir = cwd.to_path_buf();
+    for _ in 0..4 {
+        if dir.join("bun.lockb").is_file() || dir.join("bun.lock").is_file() {
+            return JsPackageManager::Bun;
+        }
+        if dir.join("pnpm-lock.yaml").is_file() {
+            return JsPackageManager::Pnpm;
+        }
+        if dir.join("yarn.lock").is_file() {
+            return JsPackageManager::Yarn;
+        }
+        if dir.join("package-lock.json").is_file() {
+            return JsPackageManager::Npm;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    // No lockfile: pick the fastest tool that appears installed.
+    if command_exists("bun") {
+        return JsPackageManager::Bun;
+    }
+    if command_exists("pnpm") {
+        return JsPackageManager::Pnpm;
+    }
+    if command_exists("yarn") {
+        return JsPackageManager::Yarn;
+    }
+    JsPackageManager::Npm
+}
+
+fn command_exists(name: &str) -> bool {
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {} >/dev/null 2>&1", name))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// System-prompt block: force agents away from slow bare `npm` defaults.
+pub fn js_package_manager_policy_prompt(cwd: &Path) -> String {
+    let pm = detect_js_package_manager(cwd);
+    format!(
+        "\n\nJS PACKAGE MANAGER POLICY (MANDATORY — DO NOT IGNORE):\n\
+         Models default to `npm` because training data is full of it. That is a BAD default: npm is slow.\n\
+         \n\
+         Detected preference for this workspace: **{pm}**\n\
+         - Install: `{install}`\n\
+         - Run script: `{run}`\n\
+         - One-off / scaffold: `{exec}`\n\
+         \n\
+         HARD RULES:\n\
+         1. NEVER run bare `npm install`, `npm i`, `npm create`, or `npx` unless the repo ONLY has package-lock.json\n\
+            and neither bun nor pnpm nor yarn is appropriate — or the user explicitly asked for npm.\n\
+         2. Preference order when starting a NEW project (no lockfile yet):\n\
+            **bun > pnpm > yarn > npm**. Prefer bun if available; else pnpm; npm is last resort.\n\
+         3. If a lockfile exists, ALWAYS use that package manager (never fight the lockfile).\n\
+         4. Replace common bad defaults:\n\
+            - `npm install` → `{install}`\n\
+            - `npm run X` → use {pm} run\n\
+            - `npx create-vite@latest` → `bunx create-vite@latest` or `pnpm dlx create-vite@latest`\n\
+            - `npm create vite@latest` → `bun create vite` / `pnpm create vite` (with non-interactive flags)\n\
+         5. Always non-interactive: add -y / --yes where needed so commands never hang on prompts.\n\
+         6. On Termux/mobile: prefer bun or pnpm; avoid npm (slow + tmp issues). Do not install Node stacks for Fusion itself.\n\
+         7. If the preferred tool is missing, install it once (e.g. `curl -fsSL https://bun.sh/install | bash` or\n\
+            `npm i -g pnpm` only as bootstrap) then continue with that tool — do not stay on npm.\n",
+        pm = pm.as_str(),
+        install = pm.install_cmd(),
+        run = pm.run_script("build"),
+        exec = pm.exec("create-vite@latest . --template react-ts"),
+    )
+}
+
 fn expand_model_shorthand(model: &str) -> String {
     if let Some(rest) = model.strip_prefix("cloudflare/") {
         let expanded = if rest.contains('/') {
@@ -1120,5 +1396,55 @@ api_key = "xai-old"
         assert!(content.contains("[provider.cloudflare]"));
         assert!(content.contains("account_id = \"acct_1\""));
         assert!(content.contains("api_key = \"cfat_k\""));
+    }
+
+    #[test]
+    fn test_remap_tmp_paths() {
+        let real = PathBuf::from("/data/data/com.termux/files/usr/tmp");
+        assert_eq!(
+            remap_tmp_paths("mktemp -d /tmp/foo.XXXX", &real),
+            "mktemp -d /data/data/com.termux/files/usr/tmp/foo.XXXX"
+        );
+        assert_eq!(
+            remap_tmp_paths("echo hi > /tmp/out.txt", &real),
+            "echo hi > /data/data/com.termux/files/usr/tmp/out.txt"
+        );
+        // Do not rewrite mid-word paths like /tmpdir
+        assert_eq!(
+            remap_tmp_paths("ls /tmpdir", &real),
+            "ls /tmpdir"
+        );
+        // Leave unrelated commands alone
+        assert_eq!(remap_tmp_paths("ls -la", &real), "ls -la");
+    }
+
+    #[test]
+    fn test_fusion_temp_dir_is_writable() {
+        let tmp = fusion_temp_dir();
+        assert!(
+            ensure_writable_dir(&tmp),
+            "fusion_temp_dir should be writable: {}",
+            tmp.display()
+        );
+    }
+
+    #[test]
+    fn test_detect_js_package_manager_lockfiles() {
+        let tmp = std::env::temp_dir().join(format!(
+            "fusion-test-pm-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // pnpm lock wins
+        fs::write(tmp.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        assert_eq!(detect_js_package_manager(&tmp), JsPackageManager::Pnpm);
+
+        // bun wins over pnpm when both present (check order: bun first)
+        fs::write(tmp.join("bun.lock"), "# bun\n").unwrap();
+        assert_eq!(detect_js_package_manager(&tmp), JsPackageManager::Bun);
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

@@ -33,13 +33,13 @@ impl AppEvent {
     }
 
     /// High-frequency stream chunks that can be coalesced before a redraw.
+    /// Note: Tick is NOT included — idle ticks must not force full redraws (typing lag).
     pub fn is_stream_chunk(&self) -> bool {
         matches!(
             self,
             AppEvent::Agent(AgentEvent::Thinking(_))
                 | AppEvent::Agent(AgentEvent::TextDelta(_))
                 | AppEvent::Agent(AgentEvent::ToolOutputDelta { .. })
-                | AppEvent::Tick
         )
     }
 }
@@ -61,15 +61,23 @@ impl EventHandler {
         let (input_tx, input_rx) = mpsc::unbounded_channel();
         let (app_tx, app_rx) = mpsc::unbounded_channel();
 
-        // Crossterm event polling task → input channel only
+        // Crossterm event polling task → input channel only.
+        // Poll interval is short so key latency stays low; Tick is emitted on a
+        // slower cadence so we don't wake the UI 10×/sec while idle/typing.
+        let poll_ms = 8u64; // ~125 Hz key poll — snappy on Termux + desktop
+        let tick_every = Duration::from_millis(tick_rate_ms.max(50));
+
         tokio::spawn(async move {
+            let mut last_tick = std::time::Instant::now();
             loop {
-                if event::poll(Duration::from_millis(tick_rate_ms)).unwrap_or(false) {
+                if event::poll(Duration::from_millis(poll_ms)).unwrap_or(false) {
                     if let Ok(evt) = event::read() {
                         let app_event = match evt {
                             Event::Key(key) if key.kind == KeyEventKind::Press => {
                                 Some(AppEvent::Key(key))
                             }
+                            // Ignore key release/repeat noise (some terminals spam these)
+                            Event::Key(_) => None,
                             Event::Mouse(mouse) => Some(AppEvent::Mouse(mouse)),
                             Event::Resize(w, h) => Some(AppEvent::Resize(w, h)),
                             Event::Paste(text) => Some(AppEvent::Paste(text)),
@@ -81,8 +89,9 @@ impl EventHandler {
                             }
                         }
                     }
-                } else {
-                    // Tick for spinner / paste-burst detection
+                } else if last_tick.elapsed() >= tick_every {
+                    last_tick = std::time::Instant::now();
+                    // Tick for spinner / paste-burst detection only
                     if input_tx.send(AppEvent::Tick).is_err() {
                         break;
                     }
