@@ -2,6 +2,8 @@ use fusion_core::config::Config;
 use fusion_core::error::FusionError;
 use fusion_llm::client::{create_llm_client, ChatMessage, ChatOptions, LlmClient};
 
+use crate::persona;
+use crate::swarm::TaskSwarm;
 use crate::tools::{build_tool_schemas, ToolRegistry};
 
 /// Events emitted by the agent for the TUI to render.
@@ -14,6 +16,19 @@ pub enum AgentEvent {
     ToolResult { name: String, output: String },
     FinalResponse(String),
     TodoUpdate(Vec<TodoItem>),
+    /// A sub-agent task was spawned.
+    TaskSpawned {
+        task_id: String,
+        persona: String,
+        description: String,
+    },
+    /// Progress event from a running sub-agent task.
+    TaskProgress {
+        task_id: String,
+        event: Box<AgentEvent>,
+    },
+    /// A sub-agent task completed (or failed/timed out).
+    TaskCompleted { task_id: String, summary: String },
 }
 
 /// A todo item tracked by the agent.
@@ -34,6 +49,7 @@ pub struct Agent {
     pub arbitrage_mode: bool,
     max_rounds: usize,
     max_tokens: Option<u32>,
+    swarm: TaskSwarm,
 }
 
 const TERMUX_API_SKILL: &str = include_str!("termux_api_skill.md");
@@ -50,6 +66,9 @@ impl Agent {
             .or_else(|| std::env::var("KEENABLE_API_KEY").ok());
         let tool_registry = ToolRegistry::new(&cwd, None, keenable_api_key);
 
+        let max_concurrency =
+            setting_u64(config, "swarm_max_concurrency", 4).max(1) as usize;
+
         Self {
             config: config.clone(),
             llm,
@@ -60,6 +79,7 @@ impl Agent {
             arbitrage_mode: true,
             max_rounds: setting_u64(config, "agent_max_rounds", 25).max(1) as usize,
             max_tokens: None,
+            swarm: TaskSwarm::new(max_concurrency),
         }
     }
 
@@ -236,10 +256,15 @@ impl Agent {
                     "\n\nTOKEN ARBITRAGE MODE (ACTIVE):\n\
                      - You are the Premium Auditor/Planner model.\n\
                      - Your role is restricted to specification, planning, and validation/judgement.\n\
-                     - **CRITICAL**: Do NOT use direct code writing tools (like write_file or search_replace) yourself. Instead, delegate ALL code writing and file editing tasks to the cheaper fast model by using the `delegate_write` tool.\n\
-                     - **CRITICAL**: You MUST call the `delegate_write` tool using the structured tool/function call mechanism. Do NOT write out the tool call or its JSON arguments in your text response, as it will not be executed by the system. Always use the native tool calling capability.\n\
-                     - When calling `delegate_write`, provide a clear, step-by-step description of the coding task, lists of files, and a test/build acceptance command.\n\
-                     - After the `delegate_write` tool returns, review the returned git diff and verification outcomes. If there are remaining errors, call `delegate_write` again to fix them or refine the code.\n"
+                     - **CRITICAL**: Do NOT use direct code writing tools (like write_file or search_replace) yourself. Instead, delegate ALL code writing and file editing tasks to sub-agents using the `task` tool.\n\
+                     - **CRITICAL**: You MUST call the `task` tool using the structured tool/function call mechanism. Do NOT write out the tool call or its JSON arguments in your text response.\n\
+                     - Available personas: scout (fast recon), worker (code writing), reviewer (quality check), planner (architecture planning).\n\
+                     - SINGLE mode: {\"persona\": \"worker\", \"task\": \"description\"}\n\
+                     - PARALLEL mode: {\"tasks\": [{\"persona\": \"scout\", \"task\": \"...\"}, {\"persona\": \"worker\", \"task\": \"...\"}]}\n\
+                     - BACKGROUND mode: {\"persona\": \"worker\", \"task\": \"...\", \"background\": true} — returns immediately with task_id.\n\
+                     - RESUME mode: {\"task_id\": \"<id>\", \"task\": \"continue...\"} — resumes a previous sub-agent session.\n\
+                     - After a task completes, review the returned summary and workspace changes. If there are remaining errors, dispatch another task to fix them.\n\
+                     - When dispatching parallel tasks, ensure they work on NON-OVERLAPPING files to avoid edit conflicts.\n"
                 );
                 }
 
@@ -262,33 +287,49 @@ impl Agent {
                     true
                 });
 
-                // Add delegate_write tool schema
+                // Add task tool schema for sub-agent swarm
+                let persona_list = persona::persona_names().join(", ");
                 tool_schemas.push(serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": "delegate_write",
-                    "description": "Delegate a coding/editing task to a fast, cheap model in the background. Mandatory in Arbitrage Mode.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "task_description": {
-                                "type": "string",
-                                "description": "Detailed step-by-step instructions of what changes need to be made, context, and why."
-                            },
-                            "files": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "description": "The file paths (relative to project root) that need to be read or modified."
-                            },
-                            "acceptance_criteria": {
-                                "type": "string",
-                                "description": "A terminal command to run after editing to verify the changes (e.g. 'cargo test' or 'npm run build')."
+                    "type": "function",
+                    "function": {
+                        "name": "task",
+                        "description": format!("Spawn a sub-agent to perform a task. Available personas: {}. Supports single mode (persona + task), parallel mode (tasks array), and background mode (background: true). Use task_id to resume a previous task.", persona_list),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "persona": {
+                                    "type": "string",
+                                    "enum": persona::persona_names(),
+                                    "description": "The type of specialized agent to use. scout=fast recon, worker=code writing, reviewer=quality check, planner=architecture planning."
+                                },
+                                "task": {
+                                    "type": "string",
+                                    "description": "The task description for the sub-agent (single/background mode)."
+                                },
+                                "tasks": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "persona": { "type": "string" },
+                                            "task": { "type": "string" }
+                                        },
+                                        "required": ["persona", "task"]
+                                    },
+                                    "description": "Array of {persona, task} for parallel execution (max 8)."
+                                },
+                                "task_id": {
+                                    "type": "string",
+                                    "description": "Resume a previous task by its task_id (continues the same sub-agent session)."
+                                },
+                                "background": {
+                                    "type": "boolean",
+                                    "description": "Run the sub-agent in the background. Returns immediately with task_id. You will be notified when it finishes."
+                                }
                             }
-                        },
-                        "required": ["task_description", "files", "acceptance_criteria"]
+                        }
                     }
-                }
-            }));
+                }));
             }
             let max_rounds = self.max_rounds;
 
@@ -298,6 +339,22 @@ impl Agent {
                 let pacing_ms = setting_u64(&self.config, "agent_pacing_ms", 0);
                 if round > 0 && pacing_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(pacing_ms)).await;
+                }
+
+                // Drain completed background tasks and inject outcomes
+                let completed_tasks = self.swarm.drain_completed().await;
+                for result in completed_tasks {
+                    let formatted = format!(
+                        "--- Background Task Completed ---\n\
+                         task_id: {}\n\
+                         persona: {}\n\
+                         status: {}\n\
+                         summary:\n{}\n\n\
+                         workspace changes:\n{}\n\
+                         ---------------------------------",
+                        result.task_id, result.persona, result.status, result.summary, result.workspace_changes
+                    );
+                    self.messages.push(ChatMessage::system(formatted));
                 }
 
                 // Inject a wrap-up nudge when running low on rounds
@@ -372,8 +429,10 @@ impl Agent {
                         });
 
                         // Execute the tool
-                        let output = if tc.name == "delegate_write" {
-                            self.execute_delegate_write(&tc.arguments, tx.clone()).await
+                        let output = if tc.name == "task" {
+                            self.swarm
+                                .execute(&tc.arguments, &self.config, &self.cwd, tx.clone())
+                                .await
                         } else {
                             execute_tool_streaming(
                                 &self.tool_registry,
@@ -565,213 +624,9 @@ impl Agent {
         self.max_tokens = max_tokens;
     }
 
-    async fn execute_delegate_write(
-        &self,
-        arguments: &serde_json::Value,
-        tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    ) -> String {
-        let task_description = arguments["task_description"].as_str().unwrap_or("");
-        let files: Vec<String> = arguments["files"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let acceptance_criteria = arguments["acceptance_criteria"].as_str().unwrap_or("");
-
-        let main_cwd = self.cwd.clone();
-
-        let _ = tx.send(AgentEvent::TextDelta(format!(
-            "\n[Arbitrage] Spawning fast coder sub-agent (Workspace: Direct Write) (Files: {:?})...\n",
-            files
-        )));
-
-        // 1. Get the small model client config
-        let small_model_id = self.get_small_model_id();
-        let mut small_config = self.config.clone();
-        small_config.model = small_model_id.clone();
-
-        // 2. Build the system prompt for the cheap model
-        let files_list = files.join(", ");
-        let sys_prompt = format!(
-            "You are a fast, precise code writer assistant.\n\n\
-             OBJECTIVE:\n\
-             {}\n\n\
-             TARGET FILES:\n\
-             {}\n\n\
-             ACCEPTANCE CRITERIA:\n\
-             {}\n\n\
-             INSTRUCTIONS:\n\
-             1. Read the target files to understand current code.\n\
-             2. Prefer apply_patch for compact existing-file edits and multi-file changes.\n\
-             3. Use search_replace for a single exact replacement. Use write_file only for new files or intentional full rewrites.\n\
-             4. Every write_file call MUST include both path and complete content. Never call a write tool with an empty object.\n\
-             5. Do not run the full acceptance command; the parent runs it once after your edits.\n\
-             6. You may run a small targeted check only when it directly helps complete an edit.\n\
-             7. Once the edits are complete, provide a concise summary and finish.\n\n\
-             TONE AND STYLE:\n\
-             - Be concise, direct, and to the point.\n\
-             - Do not add unnecessary preamble or postamble (such as explaining your code or summarizing your action).\n\
-             - Minimize output tokens as much as possible.\n\n\
-             FOLLOWING CONVENTIONS:\n\
-             - Mimic local code style and conventions.\n\
-             - Make MINIMAL changes to achieve the goal.\n\
-             - DO NOT ADD ANY COMMENTS unless asked.",
-            task_description, files_list, acceptance_criteria
-        );
-
-        // 3. Instantiate the sub-agent reusing the main Agent engine directly in main workspace
-        let keenable_api_key = self
-            .config
-            .settings
-            .get("keenable")
-            .and_then(|v| v.get("api_key"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| std::env::var("KEENABLE_API_KEY").ok());
-
-        let sub_tool_registry =
-            ToolRegistry::new(&main_cwd, Some(main_cwd.clone()), keenable_api_key);
-        let mut sub_agent = Agent {
-            config: small_config.clone(),
-            llm: create_llm_client(&small_config),
-            messages: vec![ChatMessage::system(sys_prompt)],
-            todos: Vec::new(),
-            cwd: main_cwd.clone(),
-            tool_registry: sub_tool_registry,
-            arbitrage_mode: false, // Enable direct editing tools for the focused worker.
-            max_rounds: setting_u64(&self.config, "subagent_max_rounds", 12).max(1) as usize,
-            max_tokens: Some(
-                setting_u64(&self.config, "subagent_max_tokens", 16384).clamp(1024, u32::MAX as u64)
-                    as u32,
-            ),
-        };
-
-        // 4. Create custom channel to intercept and pretty-print sub-agent progress to main TUI
-        let (sub_tx, mut sub_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tx_clone = tx.clone();
-
-        let event_forwarder = tokio::spawn(async move {
-            while let Some(event) = sub_rx.recv().await {
-                match event {
-                    AgentEvent::TextDelta(delta) => {
-                        let _ = tx_clone.send(AgentEvent::TextDelta(delta));
-                    }
-                    AgentEvent::Thinking(thinking) => {
-                        let _ = tx_clone.send(AgentEvent::Thinking(thinking));
-                    }
-                    AgentEvent::ToolCall { name, args_preview } => {
-                        let _ = tx_clone.send(AgentEvent::ToolCall {
-                            name: format!("subagent:{}", name),
-                            args_preview,
-                        });
-                    }
-                    AgentEvent::ToolOutputDelta { name, output } => {
-                        let _ = tx_clone.send(AgentEvent::ToolOutputDelta {
-                            name: format!("subagent:{}", name),
-                            output,
-                        });
-                    }
-                    AgentEvent::ToolResult { name, output } => {
-                        let _ = tx_clone.send(AgentEvent::ToolResult {
-                            name: format!("subagent:{}", name),
-                            output,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        });
-
-        // 5. Bound the worker run so a stalled provider or tool cannot block the parent forever.
-        let timeout_secs = setting_u64(&self.config, "subagent_timeout_secs", 900).max(1);
-        let sub_result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            sub_agent.process("Please implement the requested changes now.", sub_tx),
-        )
-        .await;
-
-        // The process future owns the final sender. Once it completes or is cancelled,
-        // the forwarder drains all remaining streamed events and exits.
-        let _ = event_forwarder.await;
-
-        let (status, sub_summary) = match sub_result {
-            Ok(Ok(())) => (
-                "completed",
-                sub_agent
-                    .messages
-                    .last()
-                    .map(|m| m.content.clone())
-                    .unwrap_or_else(|| "Sub-agent finished without a summary.".to_string()),
-            ),
-            Ok(Err(e)) => ("failed", format!("Sub-agent execution error: {}", e)),
-            Err(_) => (
-                "timed_out",
-                format!(
-                    "Sub-agent exceeded its {} second deadline; partial edits were preserved.",
-                    timeout_secs
-                ),
-            ),
-        };
-
-        // Return compact workspace metadata instead of injecting a potentially huge full diff
-        // into the parent model's next request.
-        let changes_args = serde_json::json!({
-            "command": "git status --short && git diff --stat",
-            "timeout_secs": 10
-        });
-        let changes = execute_tool_streaming(
-            &sub_agent.tool_registry,
-            "run_command",
-            &changes_args,
-            "subagent:changes",
-            &tx,
-        )
-        .await
-        .unwrap_or_else(|e| format!("Failed to inspect workspace changes: {}", e));
-
-        // The parent owns verification, so the expensive command runs at most once.
-        let verify_timeout = setting_u64(&self.config, "subagent_verify_timeout_secs", 120).max(1);
-        let verification = if status == "completed" && !acceptance_criteria.trim().is_empty() {
-            let verify_args = serde_json::json!({
-                "command": acceptance_criteria,
-                "timeout_secs": verify_timeout
-            });
-            execute_tool_streaming(
-                &sub_agent.tool_registry,
-                "run_command",
-                &verify_args,
-                "subagent:verification",
-                &tx,
-            )
-            .await
-            .unwrap_or_else(|e| format!("Verification failed: {}", e))
-        } else if acceptance_criteria.trim().is_empty() {
-            "Not requested".to_string()
-        } else {
-            "Skipped because the sub-agent did not complete successfully".to_string()
-        };
-
-        format!(
-            "Sub-agent result\n\
-             status: {}\n\
-             model: {}\n\
-             summary:\n{}\n\n\
-             workspace changes:\n{}\n\n\
-             verification:\n{}",
-            status, small_model_id, sub_summary, changes, verification
-        )
-    }
-
-    fn get_small_model_id(&self) -> String {
-        if let Some(ref m) = self.config.small_model {
-            if !m.is_empty() {
-                return m.clone();
-            }
-        }
-        self.config.model.clone()
+    /// Get the swarm for external task management (cancel, list, etc.)
+    pub fn swarm(&self) -> &TaskSwarm {
+        &self.swarm
     }
 }
 
@@ -844,5 +699,90 @@ mod tests {
         assert!(agent.messages[0]
             .content
             .contains("LLM model: @cf/zai-org/glm-4.7-flash."));
+    }
+
+    #[tokio::test]
+    async fn test_agent_loop_with_harness() {
+        use fusion_llm::client::{ChatResult, ToolCall};
+
+        // 1. Create a temporary directory path manually
+        let temp_dir_path = std::env::temp_dir().join(format!(
+            "fusion-agent-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir_path).unwrap();
+        let cwd_str = temp_dir_path.to_string_lossy().to_string();
+
+        // 2. Setup config with Provider::Faux
+        let config = Config {
+            provider: Provider::Faux,
+            model: "faux".to_string(),
+            small_model: None,
+            api_key: String::new(),
+            base_url: String::new(),
+            cloudflare_account_id: None,
+            yolo: true, // Auto-approve shell execution
+            config_path: None,
+            settings: Default::default(),
+        };
+
+        // 3. Queue faux responses
+        let first_response = ChatResult {
+            content: "I will write 'hello world' to a file named hello.txt.".to_string(),
+            reasoning_content: Some("I need to write 'hello world' to a file.".to_string()),
+            tool_calls: vec![ToolCall {
+                id: "call_write".to_string(),
+                name: "write_file".to_string(),
+                arguments: serde_json::json!({
+                    "path": "hello.txt",
+                    "content": "hello world"
+                }),
+            }],
+        };
+
+        let second_response = ChatResult {
+            content: "I have successfully created the file.".to_string(),
+            reasoning_content: None,
+            tool_calls: vec![],
+        };
+
+        fusion_llm::client::faux::set_responses(vec![
+            Ok(first_response),
+            Ok(second_response),
+        ]);
+
+        // 4. Run the agent process
+        let mut agent = Agent::new(&config, cwd_str);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(async move {
+            agent.process("Write a file", tx).await
+        });
+
+        // Collect events
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+
+        handle.await.unwrap().unwrap();
+
+        // 5. Assert file creation and contents
+        let file_path = temp_dir_path.join("hello.txt");
+        assert!(file_path.exists());
+        let content = std::fs::read_to_string(file_path).unwrap();
+        assert_eq!(content, "hello world");
+
+        // 6. Assert expected events
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Thinking(_))));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolCall { ref name, .. } if name == "write_file")));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolResult { ref name, .. } if name == "write_file")));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::FinalResponse(_))));
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir_path);
     }
 }

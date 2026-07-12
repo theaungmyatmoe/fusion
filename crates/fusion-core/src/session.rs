@@ -14,6 +14,9 @@ pub struct Session {
     pub cwd: String,
     pub model: String,
     pub messages: Vec<SessionMessage>,
+    /// IDs of sub-agent task sessions spawned during this conversation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_sessions: Vec<String>,
 }
 
 /// A message stored in a session.
@@ -39,6 +42,7 @@ impl Session {
             cwd: cwd.to_string(),
             model: model.to_string(),
             messages: Vec::new(),
+            task_sessions: Vec::new(),
         }
     }
 

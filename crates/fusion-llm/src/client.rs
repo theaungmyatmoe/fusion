@@ -5,6 +5,34 @@ use serde::{Deserialize, Serialize};
 use fusion_core::config::{is_cloudflare_model, Config, Provider};
 use fusion_core::error::FusionError;
 
+pub mod faux {
+    use super::ChatResult;
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::VecDeque;
+
+    static FAUX_RESPONSES: OnceLock<Mutex<VecDeque<Result<ChatResult, String>>>> = OnceLock::new();
+
+    pub fn get_faux_responses() -> &'static Mutex<VecDeque<Result<ChatResult, String>>> {
+        FAUX_RESPONSES.get_or_init(|| Mutex::new(VecDeque::new()))
+    }
+
+    pub fn set_responses(responses: Vec<Result<ChatResult, String>>) {
+        let mut lock = get_faux_responses().lock().unwrap();
+        lock.clear();
+        lock.extend(responses);
+    }
+
+    pub fn append_responses(responses: Vec<Result<ChatResult, String>>) {
+        let mut lock = get_faux_responses().lock().unwrap();
+        lock.extend(responses);
+    }
+
+    pub fn clear_responses() {
+        let mut lock = get_faux_responses().lock().unwrap();
+        lock.clear();
+    }
+}
+
 /// A single chat message in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -170,6 +198,30 @@ impl LlmClient {
         options: ChatOptions,
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
     ) -> Result<ChatResult, FusionError> {
+        if self.config.provider == Provider::Faux {
+            let mut lock = faux::get_faux_responses().lock().unwrap();
+            if let Some(res) = lock.pop_front() {
+                match res {
+                    Ok(chat_res) => {
+                        if let Some(ref tx) = event_tx {
+                            if let Some(ref reasoning) = chat_res.reasoning_content {
+                                let _ = tx.send(LlmEvent::Thinking(reasoning.clone()));
+                            }
+                            if !chat_res.content.is_empty() {
+                                let _ = tx.send(LlmEvent::TextDelta(chat_res.content.clone()));
+                            }
+                        }
+                        return Ok(chat_res);
+                    }
+                    Err(e) => {
+                        return Err(FusionError::Llm(e));
+                    }
+                }
+            } else {
+                return Err(FusionError::Llm("No faux responses queued".into()));
+            }
+        }
+
         let account_id = self
             .config
             .cloudflare_account_id

@@ -398,7 +398,207 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
             is_first = false;
             prev_role = msg.role.as_str();
 
+            if msg.role.starts_with("task_progress_") {
+                for line in msg.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                        Span::styled(line.to_string(), Style::default().fg(theme.dim)),
+                    ]));
+                }
+                continue;
+            }
+
             match msg.role.as_str() {
+                "task_spawned" => {
+                    let mut task_id = "";
+                    let mut persona = "";
+                    let description = if let Some(pos) = msg.content.find("\ndescription: ") {
+                        let header_part = &msg.content[..pos];
+                        for line in header_part.lines() {
+                            if let Some(stripped) = line.strip_prefix("task_id: ") {
+                                task_id = stripped;
+                            } else if let Some(stripped) = line.strip_prefix("persona: ") {
+                                persona = stripped;
+                            }
+                        }
+                        &msg.content[pos + 14..]
+                    } else {
+                        &msg.content
+                    };
+
+                    let border_style = Style::default().fg(theme.border);
+                    let tag_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{250f}\u{2501} Swarm Task [", border_style),
+                        Span::styled(task_id.to_string(), tag_style),
+                        Span::styled(format!("] ({}) Spawned ", persona), border_style),
+                        Span::styled("\u{2501}".repeat(20), border_style),
+                    ]));
+
+                    let desc_lines = render_markdown(description, wrap_width, theme);
+                    for d_line in desc_lines {
+                        let mut spans = vec![Span::styled("  \u{2503}  ", border_style)];
+                        spans.extend(d_line.spans);
+                        lines.push(Line::from(spans));
+                    }
+
+                    lines.push(Line::from(Span::styled("  \u{2517}\u{2501}\u{2501}", border_style)));
+                }
+                "task_tool_call" => {
+                    let mut task_id = "";
+                    let mut tool_name = "";
+                    let mut args = "";
+                    for line in msg.content.lines() {
+                        if let Some(stripped) = line.strip_prefix("task_id: ") {
+                            task_id = stripped;
+                        } else if let Some(stripped) = line.strip_prefix("tool_name: ") {
+                            tool_name = stripped;
+                        } else if let Some(stripped) = line.strip_prefix("args: ") {
+                            args = stripped;
+                        }
+                    }
+
+                    let header_style = Style::default().fg(theme.bold_color).add_modifier(Modifier::BOLD);
+                    let tag_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+
+                    let display_cmd = if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                        if tool_name == "run_command" {
+                            v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args.to_string())
+                        } else if tool_name == "write_file" {
+                            let path = v["path"].as_str().unwrap_or("");
+                            let content_len = v["content"].as_str().map(|s| s.len()).unwrap_or(0);
+                            format!("Path: {}\nWriting {} bytes", path, content_len)
+                        } else if tool_name == "read_file" {
+                            v["path"].as_str().map(|s| format!("Path: {}", s)).unwrap_or_else(|| args.to_string())
+                        } else if tool_name == "search_replace" {
+                            let path = v["path"].as_str().unwrap_or("");
+                            let old = v["old_string"].as_str().unwrap_or("");
+                            let new = v["new_string"].as_str().unwrap_or("");
+                            format!("Path: {}\nSearch:\n  {}\nReplace:\n  {}", path, old.replace('\n', "\n  "), new.replace('\n', "\n  "))
+                        } else {
+                            args.to_string()
+                        }
+                    } else {
+                        args.to_string()
+                    };
+
+                    let is_next_tool_result = msg_idx + 1 < app.messages.len() && app.messages[msg_idx + 1].role == "task_tool_result";
+                    let left_border = if is_next_tool_result { "\u{250f}\u{2501}" } else { "\u{250f}\u{2501}" };
+
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {} Swarm [", left_border), Style::default().fg(theme.border)),
+                        Span::styled(task_id.to_string(), tag_style),
+                        Span::styled("] Calling: ", Style::default().fg(theme.border)),
+                        Span::styled(tool_name.to_string(), header_style),
+                    ]));
+
+                    for arg_line in display_cmd.lines() {
+                        lines.push(Line::from(vec![
+                            Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
+                            Span::styled(arg_line.to_string(), Style::default().fg(theme.code_block_fg)),
+                        ]));
+                    }
+                }
+                "task_tool_result" => {
+                    let mut task_id = "";
+                    let mut tool_name = "";
+                    let output = if let Some(pos) = msg.content.find("\noutput: ") {
+                        let header_part = &msg.content[..pos];
+                        for line in header_part.lines() {
+                            if let Some(stripped) = line.strip_prefix("task_id: ") {
+                                task_id = stripped;
+                            } else if let Some(stripped) = line.strip_prefix("tool_name: ") {
+                                tool_name = stripped;
+                            }
+                        }
+                        &msg.content[pos + 9..]
+                    } else {
+                        &msg.content
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{2503}   \u{21b3} Result [", Style::default().fg(theme.border)),
+                        Span::styled(task_id.to_string(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("] {}:", tool_name), Style::default().fg(theme.border)),
+                    ]));
+
+                    let output_lines: Vec<&str> = output.lines().collect();
+                    let max_display_lines = 30;
+                    let truncated = output_lines.len() > max_display_lines;
+                    let display_lines = if truncated {
+                        &output_lines[..max_display_lines]
+                    } else {
+                        &output_lines[..]
+                    };
+
+                    for line in display_lines {
+                        let trimmed = line.trim();
+                        let (prefix_style, line_style) = if trimmed.starts_with("SUCCESS") || trimmed.starts_with("✓") {
+                            (Style::default().fg(theme.border), Style::default().fg(Color::Green))
+                        } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+                            (Style::default().fg(theme.border), Style::default().fg(Color::Green))
+                        } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+                            (Style::default().fg(theme.border), Style::default().fg(Color::Red))
+                        } else if trimmed.starts_with("@@") {
+                            (Style::default().fg(theme.border), Style::default().fg(Color::Cyan))
+                        } else if trimmed.starts_with("ERROR") || trimmed.starts_with("Failed") {
+                            (Style::default().fg(theme.border), Style::default().fg(Color::Red))
+                        } else {
+                            (Style::default().fg(theme.border), Style::default().fg(theme.code_block_fg))
+                        };
+
+                        lines.push(Line::from(vec![
+                            Span::styled("  \u{2503}   ", prefix_style),
+                            Span::styled(line.to_string(), line_style),
+                        ]));
+                    }
+
+                    if truncated {
+                        lines.push(Line::from(vec![
+                            Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
+                            Span::styled(
+                                format!("… {} more lines (truncated)", output_lines.len() - max_display_lines),
+                                Style::default().fg(theme.dim),
+                            ),
+                        ]));
+                    }
+
+                    lines.push(Line::from(Span::styled("  \u{2517}\u{2501}\u{2501}", Style::default().fg(theme.border))));
+                }
+                "task_completed" => {
+                    let mut task_id = "";
+                    let summary = if let Some(pos) = msg.content.find("\nsummary: ") {
+                        let header_part = &msg.content[..pos];
+                        for line in header_part.lines() {
+                            if let Some(stripped) = line.strip_prefix("task_id: ") {
+                                task_id = stripped;
+                            }
+                        }
+                        &msg.content[pos + 10..]
+                    } else {
+                        &msg.content
+                    };
+
+                    let border_style = Style::default().fg(theme.border);
+                    let tag_style = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{250f}\u{2501} Swarm Task [", border_style),
+                        Span::styled(task_id.to_string(), tag_style),
+                        Span::styled("] Completed ", border_style),
+                        Span::styled("\u{2501}".repeat(20), border_style),
+                    ]));
+
+                    let summary_lines = render_markdown(summary, wrap_width, theme);
+                    for s_line in summary_lines {
+                        let mut spans = vec![Span::styled("  \u{2503}  ", border_style)];
+                        spans.extend(s_line.spans);
+                        lines.push(Line::from(spans));
+                    }
+
+                    lines.push(Line::from(Span::styled("  \u{2517}\u{2501}\u{2501}", border_style)));
+                }
                 "user" => {
                     lines.push(Line::from("")); // Space above the block
                     

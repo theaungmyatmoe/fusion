@@ -15,6 +15,7 @@ pub enum Provider {
     #[serde(rename = "openai")]
     OpenAi,
     Auto,
+    Faux,
 }
 
 impl Default for Provider {
@@ -382,12 +383,14 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
         "cloudflare" => Provider::Cloudflare,
         "xai" => Provider::Xai,
         "openai" => Provider::OpenAi,
+        "faux" => Provider::Faux,
         _ => file_provider_default
             .as_deref()
             .map(|s| match s {
                 "cloudflare" => Provider::Cloudflare,
                 "xai" => Provider::Xai,
                 "openai" => Provider::OpenAi,
+                "faux" => Provider::Faux,
                 _ => Provider::Auto,
             })
             .unwrap_or(Provider::Auto),

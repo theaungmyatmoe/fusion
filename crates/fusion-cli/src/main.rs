@@ -49,6 +49,14 @@ struct Cli {
     #[arg(long)]
     sessions: bool,
 
+    /// List all background tasks and sub-agent sessions
+    #[arg(long)]
+    tasks: bool,
+
+    /// Resume a sub-agent task session by ID
+    #[arg(long = "resume-task")]
+    resume_task: Option<String>,
+
     /// Remaining arguments form an initial prompt
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
@@ -183,6 +191,143 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // List tasks and exit
+    if cli.tasks {
+        match fusion_core::task_session::list_task_sessions() {
+            Ok(tasks) => {
+                if tasks.is_empty() {
+                    println!("No task sessions.");
+                } else {
+                    println!("Recent tasks:");
+                    for (i, t) in tasks.iter().take(20).enumerate() {
+                        let age = format_age(t.updated_at);
+                        println!(
+                            "  {}. {} ({} msgs, {}, status: {}) - [{}] {}",
+                            i + 1,
+                            &t.task_id[..8.min(t.task_id.len())],
+                            t.message_count,
+                            age,
+                            t.status,
+                            t.persona,
+                            t.description
+                        );
+                    }
+                    println!();
+                    println!("Resume: fusion --resume-task <id>");
+                }
+            }
+            Err(e) => {
+                eprintln!("Error listing tasks: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    // Resume sub-agent task and exit
+    if let Some(ref task_id_input) = cli.resume_task {
+        let task_session = match fusion_core::task_session::TaskSession::load(task_id_input) {
+            Ok(ts) => ts,
+            Err(_) => {
+                match fusion_core::task_session::list_task_sessions() {
+                    Ok(tasks) => {
+                        let matched = tasks.iter().find(|t| t.task_id.starts_with(task_id_input));
+                        match matched {
+                            Some(ts_summary) => {
+                                match fusion_core::task_session::TaskSession::load(&ts_summary.task_id) {
+                                    Ok(ts) => ts,
+                                    Err(e) => {
+                                        eprintln!("Cannot load task {}: {}", task_id_input, e);
+                                        std::process::exit(1);
+                                    }
+                                }
+                            }
+                            None => {
+                                eprintln!("Task session '{}' not found. Use --tasks to list.", task_id_input);
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error listing tasks: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        };
+
+        let persona_name = &task_session.persona;
+        let persona = match fusion_agent::persona::get_persona(persona_name) {
+            Some(p) => p,
+            None => {
+                eprintln!("Unknown persona: {}", persona_name);
+                std::process::exit(1);
+            }
+        };
+
+        let cwd = task_session.cwd.clone();
+        let task_desc = task_session.description.clone();
+        let task_id = task_session.task_id.clone();
+
+        eprintln!("Resuming sub-agent task {} [{}]...", task_id, persona_name);
+
+        let (agent_tx, agent_rx) = tokio::sync::mpsc::unbounded_channel();
+        let forwarder = tokio::spawn(async move {
+            use std::io::Write;
+            let mut agent_rx = agent_rx;
+            while let Some(event) = agent_rx.recv().await {
+                match event {
+                    fusion_agent::agent::AgentEvent::Thinking(text) => {
+                        eprint!("{}", text);
+                        let _ = std::io::stderr().flush();
+                    }
+                    fusion_agent::agent::AgentEvent::TextDelta(text) => {
+                        print!("{}", text);
+                        let _ = std::io::stdout().flush();
+                    }
+                    fusion_agent::agent::AgentEvent::ToolCall { name, args_preview } => {
+                        eprintln!("\n[tool call] {} {}", name, args_preview);
+                    }
+                    fusion_agent::agent::AgentEvent::ToolOutputDelta { name: _, output } => {
+                        eprint!("{}", output);
+                        let _ = std::io::stderr().flush();
+                    }
+                    fusion_agent::agent::AgentEvent::ToolResult { name, output } => {
+                        eprintln!("\n[tool result] {}\n{}", name, output);
+                    }
+                    fusion_agent::agent::AgentEvent::TaskCompleted { task_id: _, summary } => {
+                        println!("\nTask completed successfully:\n{}", summary);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let result = fusion_agent::swarm::run_sub_agent_standalone(
+            &persona,
+            &task_desc,
+            Some(&task_id),
+            &config,
+            &cwd,
+            agent_tx,
+        )
+        .await;
+
+        let _ = forwarder.await;
+
+        match result.status {
+            fusion_core::task_session::TaskStatus::Completed => {
+                println!("Sub-agent task execution finished successfully.");
+            }
+            fusion_core::task_session::TaskStatus::Failed(e) => {
+                eprintln!("Sub-agent task execution failed: {}", e);
+                std::process::exit(1);
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
     // Resolve session for resume
     let resume_session = if cli.last {
         match Session::load_last() {
@@ -246,11 +391,12 @@ async fn main() -> anyhow::Result<()> {
     if let Some(prompt_text) = prompt {
         let cwd = current_dir.to_string_lossy().to_string();
         let mut agent = fusion_agent::agent::Agent::new(&config, cwd);
-        let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (agent_tx, agent_rx) = tokio::sync::mpsc::unbounded_channel();
         let forwarder = tokio::spawn(async move {
             use std::io::Write;
             let mut streamed_text = false;
             let mut streamed_tool_output = false;
+            let mut agent_rx = agent_rx;
             while let Some(event) = agent_rx.recv().await {
                 match event {
                     fusion_agent::agent::AgentEvent::Thinking(text) => {
@@ -294,6 +440,24 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     fusion_agent::agent::AgentEvent::TodoUpdate(_) => {}
+                    fusion_agent::agent::AgentEvent::TaskSpawned { task_id, persona, description } => {
+                        let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                        eprintln!("[swarm task spawned: {} ({})] {}", short_id, persona, description);
+                    }
+                    fusion_agent::agent::AgentEvent::TaskProgress { task_id, event } => {
+                        let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                        match *event {
+                            fusion_agent::agent::AgentEvent::TextDelta(text) => {
+                                print!("[{}] {}", short_id, text);
+                                let _ = std::io::stdout().flush();
+                            }
+                            _ => {}
+                        }
+                    }
+                    fusion_agent::agent::AgentEvent::TaskCompleted { task_id, summary } => {
+                        let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                        eprintln!("[swarm task completed: {}]\n{}", short_id, summary);
+                    }
                 }
             }
         });

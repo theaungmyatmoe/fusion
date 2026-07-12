@@ -1631,6 +1631,78 @@ impl App {
                     content: format!("Todos:\n{}", list),
                 });
             }
+            AgentEvent::TaskSpawned { task_id, persona, description } => {
+                let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                self.messages.push(Message {
+                    role: "task_spawned".to_string(),
+                    content: format!("task_id: {}\npersona: {}\ndescription: {}", short_id, persona, description),
+                });
+            }
+            AgentEvent::TaskProgress { task_id, event } => {
+                let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                match *event {
+                    AgentEvent::TextDelta(text) => {
+                        let target_role = format!("task_progress_{}", task_id);
+                        if let Some(last) = self.messages.last_mut() {
+                            if last.role == target_role {
+                                last.content.push_str(&text);
+                                return;
+                            }
+                        }
+                        self.messages.push(Message {
+                            role: target_role,
+                            content: format!("[{}] {}", short_id, text),
+                        });
+                    }
+                    AgentEvent::ToolCall { name, args_preview } => {
+                        let (task_id_val, real_name) = if name.starts_with("task:") {
+                            let parts: Vec<&str> = name.split(':').collect();
+                            if parts.len() == 3 {
+                                (parts[1].to_string(), parts[2].to_string())
+                            } else {
+                                (short_id.to_string(), name.clone())
+                            }
+                        } else {
+                            (short_id.to_string(), name.clone())
+                        };
+                        self.messages.push(Message {
+                            role: "task_tool_call".to_string(),
+                            content: format!("task_id: {}\ntool_name: {}\nargs: {}", task_id_val, real_name, args_preview),
+                        });
+                    }
+                    AgentEvent::ToolResult { name, output } => {
+                        let (task_id_val, real_name) = if name.starts_with("task:") {
+                            let parts: Vec<&str> = name.split(':').collect();
+                            if parts.len() == 3 {
+                                (parts[1].to_string(), parts[2].to_string())
+                            } else {
+                                (short_id.to_string(), name.clone())
+                            }
+                        } else {
+                            (short_id.to_string(), name.clone())
+                        };
+                        let cleaned = clean_output(&output);
+                        let truncated = if cleaned.chars().count() > 1000 {
+                            let truncated_str: String = cleaned.chars().take(1000).collect();
+                            format!("{}…\n[output truncated]", truncated_str)
+                        } else {
+                            cleaned
+                        };
+                        self.messages.push(Message {
+                            role: "task_tool_result".to_string(),
+                            content: format!("task_id: {}\ntool_name: {}\noutput: {}", task_id_val, real_name, truncated),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            AgentEvent::TaskCompleted { task_id, summary } => {
+                let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                self.messages.push(Message {
+                    role: "task_completed".to_string(),
+                    content: format!("task_id: {}\nsummary: {}", short_id, summary),
+                });
+            }
         }
     }
 

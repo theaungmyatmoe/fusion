@@ -298,6 +298,24 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
     ]
 }
 
+/// Build tool schemas filtered to only the tools a given persona is allowed to use.
+/// If `allowed_tools` is empty, returns the full set.
+pub fn build_tool_schemas_for_persona(allowed_tools: &[&str]) -> Vec<serde_json::Value> {
+    if allowed_tools.is_empty() {
+        return build_tool_schemas();
+    }
+    build_tool_schemas()
+        .into_iter()
+        .filter(|schema| {
+            schema
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .is_some_and(|name| allowed_tools.contains(&name))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::validate_arguments;

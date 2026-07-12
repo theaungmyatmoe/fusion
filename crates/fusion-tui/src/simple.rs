@@ -271,6 +271,30 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             println!("    {}{} {}\x1b[0m", color, icon, t.content);
                         }
                     }
+                    AgentEvent::TaskSpawned { task_id, persona, description } => {
+                        let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                        println!("\n  \x1b[38;2;147;197;253;1m+-- [swarm task spawned: {} ({})]\x1b[0m", short_id, persona);
+                        println!("  \x1b[90m|\x1b[0m {}", description);
+                    }
+                    AgentEvent::TaskProgress { task_id, event } => {
+                        let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                        match *event {
+                            AgentEvent::TextDelta(text) => {
+                                print!("\x1b[90m[{}] {}\x1b[0m", short_id, text);
+                                let _ = std::io::stdout().flush();
+                            }
+                            AgentEvent::ToolCall { name, args_preview } => {
+                                println!("\n  \x1b[90m[{}] Calling: {} ({})\x1b[0m", short_id, name, args_preview);
+                            }
+                            _ => {}
+                        }
+                    }
+                    AgentEvent::TaskCompleted { task_id, summary } => {
+                        let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
+                        println!("\n  \x1b[32m+-- [swarm task completed: {}]\x1b[0m", short_id);
+                        println!("  \x1b[90m|\x1b[0m {}", summary.trim().replace('\n', "\n  \x1b[90m|\x1b[0m "));
+                        println!("  \x1b[32m+--\x1b[0m");
+                    }
                 }
             }
         });

@@ -5,3 +5,4 @@ pub mod models;
 pub mod search_replace;
 pub mod session;
 pub mod taste;
+pub mod task_session;
