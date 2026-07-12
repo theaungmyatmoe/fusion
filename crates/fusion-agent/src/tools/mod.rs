@@ -11,6 +11,95 @@ pub mod shell;
 pub mod todo;
 pub mod write_file;
 
+use std::path::{Path, PathBuf};
+
+/// Resolve the path and check that it stays within the `cwd` workspace directory.
+/// To protect against symlink attacks and path traversal, we canonicalize the path's
+/// existing ancestors and verify it doesn't escape `cwd`.
+pub fn resolve_path_safe(cwd: &str, main_cwd: Option<&str>, path_str: &str) -> Result<PathBuf, String> {
+    let p = Path::new(path_str);
+    let resolved = if p.is_absolute() {
+        if let Some(main) = main_cwd {
+            let main_path = Path::new(main);
+            if let Ok(relative) = p.strip_prefix(main_path) {
+                Path::new(cwd).join(relative)
+            } else {
+                p.to_path_buf()
+            }
+        } else {
+            p.to_path_buf()
+        }
+    } else {
+        Path::new(cwd).join(path_str)
+    };
+
+    let canonical_cwd = std::fs::canonicalize(cwd)
+        .map_err(|e| format!("Failed to canonicalize workspace root {}: {}", cwd, e))?;
+
+    let mut current = resolved.as_path();
+    let mut canonical_ancestor = None;
+    let mut suffix = PathBuf::new();
+
+    loop {
+        if current.exists() {
+            if let Ok(canonical) = std::fs::canonicalize(current) {
+                canonical_ancestor = Some(canonical);
+                break;
+            }
+        }
+        if let Some(parent) = current.parent() {
+            if let Some(name) = current.file_name() {
+                let mut new_suffix = PathBuf::from(name);
+                new_suffix.push(suffix);
+                suffix = new_suffix;
+            }
+            current = parent;
+        } else {
+            break;
+        }
+    }
+
+    let final_canonical_path = match canonical_ancestor {
+        Some(mut ancestor) => {
+            ancestor.push(suffix);
+            let mut normalized = PathBuf::new();
+            for component in ancestor.components() {
+                match component {
+                    std::path::Component::ParentDir => {
+                        normalized.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    c => normalized.push(c.as_os_str()),
+                }
+            }
+            normalized
+        }
+        None => {
+            let mut normalized = PathBuf::new();
+            for component in resolved.components() {
+                match component {
+                    std::path::Component::ParentDir => {
+                        normalized.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    c => normalized.push(c.as_os_str()),
+                }
+            }
+            normalized
+        }
+    };
+
+    if !final_canonical_path.starts_with(&canonical_cwd) {
+        return Err(format!(
+            "Path security violation: resolved path '{:?}' is outside workspace '{:?}'",
+            final_canonical_path, canonical_cwd
+        ));
+    }
+
+    Ok(final_canonical_path)
+}
+
+
 /// Tool registry — maps tool names to their execution logic.
 pub struct ToolRegistry {
     cwd: String,
