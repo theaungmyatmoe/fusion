@@ -20,16 +20,19 @@ yolo = false
 # Which provider to use by default: "cloudflare", "xai", "openai", "auto"
 default = "cloudflare"
 
-[provider.cloudflare]
-account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
-api_key = "YOUR_CLOUDFLARE_API_TOKEN"
+# Prefer real credentials in ~/.config/fusion/fusion.toml or env vars.
+# Template placeholders here are ignored by the loader, but keeping them
+# commented avoids confusion when debugging auth setup.
+# [provider.cloudflare]
+# account_id = "your_cloudflare_account_id"
+# api_key = "your_cloudflare_api_token"
 
 # [provider.xai]
-# api_key = "xai-YOUR_KEY"
+# api_key = "xai-your-key"
 # base_url = "https://api.x.ai/v1"
 
 # [provider.openai]
-# api_key = "sk-YOUR_KEY"
+# api_key = "sk-your-key"
 # base_url = "https://api.openai.com/v1"
 
 [settings]

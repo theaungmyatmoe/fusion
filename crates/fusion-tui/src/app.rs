@@ -86,6 +86,64 @@ pub enum AutocompleteMode {
     Providers,
 }
 
+/// Guided multi-step provider credential setup (via `/providers`).
+///
+/// Cloudflare needs two values (API token + account ID); xAI/OpenAI need one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredentialSetup {
+    pub provider: String,
+    /// Filled after step 1 (API key). When set and provider is cloudflare,
+    /// the next input is the account ID.
+    pub api_key: Option<String>,
+}
+
+impl CredentialSetup {
+    pub fn needs_account_id(&self) -> bool {
+        self.provider == "cloudflare" && self.api_key.is_some()
+    }
+
+    pub fn step_label(&self) -> &'static str {
+        if self.needs_account_id() {
+            "Account ID"
+        } else {
+            "API token"
+        }
+    }
+
+    pub fn progress_label(&self) -> String {
+        if self.provider == "cloudflare" {
+            if self.api_key.is_some() {
+                "2/2".to_string()
+            } else {
+                "1/2".to_string()
+            }
+        } else {
+            "1/1".to_string()
+        }
+    }
+
+    /// Prompt shown above/in the input while collecting a secret.
+    pub fn input_hint(&self) -> String {
+        match self.provider.as_str() {
+            "cloudflare" if self.api_key.is_some() => {
+                format!(
+                    "Cloudflare {} · paste Account ID (Esc to cancel)",
+                    self.progress_label()
+                )
+            }
+            "cloudflare" => {
+                format!(
+                    "Cloudflare {} · paste API token (Esc to cancel)",
+                    self.progress_label()
+                )
+            }
+            "xai" => "xAI · paste API key (Esc to cancel)".to_string(),
+            "openai" => "OpenAI · paste API key (Esc to cancel)".to_string(),
+            other => format!("{} · paste API key (Esc to cancel)", other),
+        }
+    }
+}
+
 /// An item in the autocomplete popup (works for both commands and models).
 #[derive(Debug, Clone)]
 pub struct AutocompleteItem {
@@ -115,10 +173,8 @@ pub struct App {
     pub autocomplete_scroll: usize,
     /// Tracks what user has typed after `@` for file filtering
     pub at_query: String,
-    /// Buffer used when in KeyInput mode — holds the API key being typed
-    pub key_buffer: String,
-    /// Which provider the user selected in the Providers picker
-    pub pending_provider: Option<String>,
+    /// Active guided credential setup (None = normal chat input)
+    pub credential_setup: Option<CredentialSetup>,
 
     // Pending model shorthand (used during effort selection)
     pending_model: Option<String>,
@@ -260,8 +316,7 @@ impl App {
             autocomplete_selected: 0,
             autocomplete_scroll: 0,
             at_query: String::new(),
-            key_buffer: String::new(),
-            pending_provider: None,
+            credential_setup: None,
             pending_model: None,
             turn_start: None,
             thought_duration: None,
@@ -336,8 +391,7 @@ impl App {
             autocomplete_selected: 0,
             autocomplete_scroll: 0,
             at_query: String::new(),
-            key_buffer: String::new(),
-            pending_provider: None,
+            credential_setup: None,
             pending_model: None,
             turn_start: None,
             thought_duration: None,
@@ -664,6 +718,25 @@ impl App {
         }
 
         self.last_key_time = Some(now);
+
+        // Guided provider credential setup intercepts Enter / Esc.
+        if self.credential_setup.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.cancel_credential_setup();
+                    return;
+                }
+                KeyCode::Enter => {
+                    if self.in_paste_burst || is_paste_like {
+                        self.input.push('\n');
+                        return;
+                    }
+                    let _ = self.handle_credential_setup_enter();
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         if self.is_thinking {
             if key.code == KeyCode::Esc {
@@ -1071,8 +1144,179 @@ impl App {
         self.autocomplete_mode = AutocompleteMode::Commands;
         self.at_query.clear();
         self.autocomplete_scroll = 0;
-        self.key_buffer.clear();
-        self.pending_provider = None;
+    }
+
+    /// Start guided credential setup after picking a provider.
+    fn start_credential_setup(&mut self, provider: &str) {
+        let provider = provider.to_lowercase();
+        self.credential_setup = Some(CredentialSetup {
+            provider: provider.clone(),
+            api_key: None,
+        });
+        self.input.clear();
+        self.close_autocomplete();
+
+        let msg = match provider.as_str() {
+            "cloudflare" => {
+                "Cloudflare setup (2 steps)\n\
+                 Step 1/2 — paste your API token, then Enter.\n\
+                 (Dashboard → My Profile → API Tokens)\n\
+                 Esc cancels."
+                    .to_string()
+            }
+            "xai" => {
+                "xAI setup\n\
+                 Paste your API key, then Enter.\n\
+                 Esc cancels."
+                    .to_string()
+            }
+            "openai" => {
+                "OpenAI setup\n\
+                 Paste your API key, then Enter.\n\
+                 Esc cancels."
+                    .to_string()
+            }
+            other => format!(
+                "{} setup\nPaste your API key, then Enter.\nEsc cancels.",
+                other
+            ),
+        };
+        self.messages.push(Message {
+            role: "system".to_string(),
+            content: msg,
+        });
+    }
+
+    /// Cancel guided credential setup (Esc).
+    fn cancel_credential_setup(&mut self) {
+        if self.credential_setup.take().is_some() {
+            self.input.clear();
+            self.messages.push(Message {
+                role: "system".to_string(),
+                content: "Provider setup cancelled.".to_string(),
+            });
+        }
+    }
+
+    /// Handle Enter while guided credential setup is active.
+    /// Returns true if the key event was consumed.
+    fn handle_credential_setup_enter(&mut self) -> bool {
+        let Some(setup) = self.credential_setup.clone() else {
+            return false;
+        };
+
+        let value = self.input.trim().to_string();
+        if value.is_empty() {
+            self.messages.push(Message {
+                role: "system".to_string(),
+                content: format!(
+                    "Paste your {} and press Enter (or Esc to cancel).",
+                    setup.step_label().to_lowercase()
+                ),
+            });
+            return true;
+        }
+
+        // Cloudflare step 1 → step 2
+        if setup.provider == "cloudflare" && setup.api_key.is_none() {
+            self.credential_setup = Some(CredentialSetup {
+                provider: setup.provider,
+                api_key: Some(value),
+            });
+            self.input.clear();
+            self.messages.push(Message {
+                role: "system".to_string(),
+                content: "Step 2/2 — paste your Cloudflare Account ID, then Enter.\n\
+                          (Dashboard sidebar → Account ID)\n\
+                          Esc cancels."
+                    .to_string(),
+            });
+            return true;
+        }
+
+        // Final step: save credentials
+        let provider = setup.provider.clone();
+        let (api_key, account_id) = if provider == "cloudflare" {
+            let key = setup.api_key.unwrap_or_default();
+            (key, Some(value))
+        } else {
+            (value, None)
+        };
+
+        self.credential_setup = None;
+        self.input.clear();
+        self.save_and_reload_credentials(Some(&provider), &api_key, account_id.as_deref());
+        true
+    }
+
+    /// Persist credentials, hot-reload agent config, and show status.
+    fn save_and_reload_credentials(
+        &mut self,
+        provider: Option<&str>,
+        key_val: &str,
+        account_id: Option<&str>,
+    ) {
+        match fusion_core::config::save_provider_credentials(provider, key_val, account_id) {
+            Ok(()) => {
+                let masked = if key_val.len() > 8 {
+                    format!("{}...{}", &key_val[..4], &key_val[key_val.len() - 4..])
+                } else {
+                    "****".to_string()
+                };
+                let prov_desc = provider.unwrap_or("detected provider").to_string();
+
+                let cwd = std::path::PathBuf::from(&self.session.cwd);
+                let mut reload_note = String::new();
+                match fusion_core::config::load_config(&cwd) {
+                    Ok(new_config) => {
+                        let has_key = !new_config.api_key.is_empty();
+                        let has_cf_account = new_config.cloudflare_account_id.is_some();
+                        let is_cf = matches!(
+                            new_config.provider,
+                            fusion_core::config::Provider::Cloudflare
+                        ) || new_config.model.starts_with("@cf/");
+                        if !has_key {
+                            reload_note = "\n⚠ Key did not load after save — check fusion.toml for overriding values.".to_string();
+                        } else if is_cf && !has_cf_account {
+                            reload_note = "\n⚠ Cloudflare account_id still missing. Run /providers again and complete both steps.".to_string();
+                        }
+                        let agent = Arc::clone(&self.agent);
+                        tokio::spawn(async move {
+                            let mut agent = agent.lock().await;
+                            agent.reload_config(&new_config);
+                        });
+                    }
+                    Err(e) => {
+                        reload_note = format!("\n⚠ Saved but reload failed: {}", e);
+                    }
+                }
+
+                let account_note = if let Some(id) = account_id {
+                    let masked_id = if id.len() > 8 {
+                        format!("{}...{}", &id[..4], &id[id.len() - 4..])
+                    } else {
+                        "****".to_string()
+                    };
+                    format!("\nAccount ID: {}", masked_id)
+                } else {
+                    String::new()
+                };
+
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!(
+                        "API credentials for {} saved to ~/.config/fusion/fusion.toml\nKey: {}{}{}\nApplied immediately — no restart needed.",
+                        prov_desc, masked, account_note, reload_note
+                    ),
+                });
+            }
+            Err(e) => {
+                self.messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!("Failed to save API key: {}", e),
+                });
+            }
+        }
     }
 
     /// Accept the currently selected autocomplete item.
@@ -1172,8 +1416,7 @@ impl App {
             AutocompleteMode::Providers => {
                 if let Some(item) = self.autocomplete_items.get(selected_idx) {
                     let provider = item.label.to_lowercase();
-                    self.input = format!("/key {} ", provider);
-                    self.close_autocomplete();
+                    self.start_credential_setup(&provider);
                 }
             }
         }
@@ -1184,17 +1427,17 @@ impl App {
         self.autocomplete_items = vec![
             AutocompleteItem {
                 label: "Cloudflare".to_string(),
-                description: "Workers AI · kimi, glm, qwen and more".to_string(),
+                description: "Workers AI · 2-step setup (token + account ID)".to_string(),
                 is_current: false,
             },
             AutocompleteItem {
                 label: "xAI".to_string(),
-                description: "Grok 3, Grok 3 Mini".to_string(),
+                description: "Grok · 1-step API key setup".to_string(),
                 is_current: false,
             },
             AutocompleteItem {
                 label: "OpenAI".to_string(),
-                description: "GPT-4o and compatible APIs".to_string(),
+                description: "GPT · 1-step API key setup".to_string(),
                 is_current: false,
             },
         ];
@@ -1755,7 +1998,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion Code commands:\n  /help          show all commands\n  /yolo          toggle auto-approve\n  /plan          enter plan mode\n  /grill         toggle grill mode (design interview)\n  /model <n>     switch model (autocomplete supported)\n  /providers     configure provider & API key\n  /max           set maximum token output\n  /high          set high token output\n  /normal        set normal token output\n  /status        current settings\n  /theme         toggle light/dark theme\n  /image         insert clipboard image\n  /session       show session ID\n  /sessions      list saved sessions\n  /clear         clear messages\n  /dq [n]        clear queue or dequeue item n\n  @filename      mention a file/image from cwd\n  /quit          quit (session auto-saved)\n  Ctrl+C twice   quit".to_string(),
+                    content: "Fusion Code commands:\n  /help          show all commands\n  /yolo          toggle auto-approve\n  /plan          enter plan mode\n  /grill         toggle grill mode (design interview)\n  /model <n>     switch model (autocomplete supported)\n  /providers     guided provider setup (CF: token + account ID)\n  /max           set maximum token output\n  /high          set high token output\n  /normal        set normal token output\n  /status        current settings\n  /theme         toggle light/dark theme\n  /image         insert clipboard image\n  /session       show session ID\n  /sessions      list saved sessions\n  /clear         clear messages\n  /dq [n]        clear queue or dequeue item n\n  @filename      mention a file/image from cwd\n  /quit          quit (session auto-saved)\n  Ctrl+C twice   quit".to_string(),
                 });
             }
             "/yolo" => {
@@ -2020,66 +2263,79 @@ impl App {
                 }
             }
             "/key" => {
-                let p1 = parts.get(1).map(|s| s.trim());
-                let p2 = parts.get(2).map(|s| s.trim().to_string());
+                // Prefer guided multi-step setup for Cloudflare (needs token + account ID).
+                // One-liner still works for power users / scripts.
+                if original_parts.len() == 1 {
+                    self.show_provider_picker();
+                    return;
+                }
+                if original_parts.len() == 2 {
+                    let p = original_parts[1].trim();
+                    if p.eq_ignore_ascii_case("cloudflare")
+                        || p.eq_ignore_ascii_case("xai")
+                        || p.eq_ignore_ascii_case("openai")
+                    {
+                        self.start_credential_setup(&p.to_lowercase());
+                        return;
+                    }
+                }
 
-                let (provider_opt, key_val) = match (p1, p2) {
-                    (Some(p), Some(k)) if p.eq_ignore_ascii_case("cloudflare") || p.eq_ignore_ascii_case("xai") || p.eq_ignore_ascii_case("openai") => {
-                        (Some(p.to_lowercase()), k)
+                // Use original_parts so API tokens keep their original case
+                // (parts is lowercased for command matching only).
+                let p1 = original_parts.get(1).map(|s| s.trim());
+                let p2 = original_parts.get(2).map(|s| s.trim().to_string());
+                let p3 = original_parts.get(3).map(|s| s.trim().to_string());
+
+                let (provider_opt, key_val, account_id_opt) = match (p1, p2, p3) {
+                    (Some(p), Some(k), account)
+                        if p.eq_ignore_ascii_case("cloudflare")
+                            || p.eq_ignore_ascii_case("xai")
+                            || p.eq_ignore_ascii_case("openai") =>
+                    {
+                        (Some(p.to_lowercase()), k, account)
                     }
-                    (Some(k), _) => {
-                        (None, k.to_string())
-                    }
+                    (Some(k), account, None) => (None, k.to_string(), account),
                     _ => {
                         self.messages.push(Message {
                             role: "system".to_string(),
-                            content: "Usage:\n  /key <api-key>\n  /key <provider> <api-key>\nProviders: cloudflare, xai, openai".to_string(),
+                            content: "Usage:\n  /providers              guided setup\n  /key <provider>         guided setup for one provider\n  /key <provider> <api-key>\n  /key cloudflare <api-token> <account-id>\n\nCloudflare needs both API token and account ID (2-step wizard).".to_string(),
                         });
                         return;
                     }
                 };
 
+                // Cloudflare one-liner without account_id → fall into guided step 2
+                if provider_opt.as_deref() == Some("cloudflare")
+                    && account_id_opt.is_none()
+                    && !key_val.is_empty()
+                {
+                    self.credential_setup = Some(CredentialSetup {
+                        provider: "cloudflare".to_string(),
+                        api_key: Some(key_val),
+                    });
+                    self.input.clear();
+                    self.messages.push(Message {
+                        role: "system".to_string(),
+                        content: "Cloudflare also needs an Account ID.\n\
+                                  Step 2/2 — paste Account ID, then Enter.\n\
+                                  (Dashboard sidebar → Account ID)\n\
+                                  Esc cancels."
+                            .to_string(),
+                    });
+                    return;
+                }
+
                 if key_val.is_empty() {
                     self.messages.push(Message {
                         role: "system".to_string(),
-                        content: "Usage:\n  /key <api-key>\n  /key <provider> <api-key>".to_string(),
+                        content: "Usage:\n  /providers\n  /key <provider>\n  /key cloudflare <api-token> <account-id>".to_string(),
                     });
                 } else {
-                    match fusion_core::config::save_api_key(provider_opt.as_deref(), &key_val) {
-                        Ok(()) => {
-                            // Mask all but first and last 4 chars for display
-                            let masked = if key_val.len() > 8 {
-                                format!("{}...{}", &key_val[..4], &key_val[key_val.len()-4..])
-                            } else {
-                                "****".to_string()
-                            };
-                            let prov_desc = provider_opt.unwrap_or_else(|| "detected provider".to_string());
-
-                            // Hot-reload: re-read config from disk and push into the live Agent
-                            let cwd = std::path::PathBuf::from(&self.session.cwd);
-                            if let Ok(new_config) = fusion_core::config::load_config(&cwd) {
-                                let agent = Arc::clone(&self.agent);
-                                tokio::spawn(async move {
-                                    let mut agent = agent.lock().await;
-                                    agent.reload_config(&new_config);
-                                });
-                            }
-
-                            self.messages.push(Message {
-                                role: "system".to_string(),
-                                content: format!(
-                                    "API key for {} saved to ~/.config/fusion/fusion.toml\nKey: {}\nApplied immediately — no restart needed.",
-                                    prov_desc, masked
-                                ),
-                            });
-                        }
-                        Err(e) => {
-                            self.messages.push(Message {
-                                role: "system".to_string(),
-                                content: format!("Failed to save API key: {}", e),
-                            });
-                        }
-                    }
+                    self.save_and_reload_credentials(
+                        provider_opt.as_deref(),
+                        &key_val,
+                        account_id_opt.as_deref(),
+                    );
                 }
             }
             "/image" => {

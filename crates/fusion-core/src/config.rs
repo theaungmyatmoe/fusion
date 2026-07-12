@@ -77,7 +77,6 @@ struct TomlProviderSection {
     #[serde(default)]
     xai: Option<TomlProviderEntry>,
     #[serde(default)]
-    #[allow(dead_code)]
     openai: Option<TomlProviderEntry>,
 }
 
@@ -123,6 +122,8 @@ struct JsonProviderSection {
     cloudflare: Option<JsonProviderEntry>,
     #[serde(default)]
     xai: Option<JsonProviderEntry>,
+    #[serde(default)]
+    openai: Option<JsonProviderEntry>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -164,9 +165,10 @@ struct ParsedFile {
     cf_account_id: Option<String>,
     cf_api_key: Option<String>,
     cf_base_url: Option<String>,
-    #[allow(dead_code)]
     xai_api_key: Option<String>,
     xai_base_url: Option<String>,
+    openai_api_key: Option<String>,
+    openai_base_url: Option<String>,
     settings: HashMap<String, serde_json::Value>,
     path: Option<PathBuf>,
 }
@@ -179,6 +181,7 @@ impl ParsedFile {
         let providers = t.provider.as_ref();
         let cf = providers.and_then(|p| p.cloudflare.as_ref());
         let xai = providers.and_then(|p| p.xai.as_ref());
+        let openai = providers.and_then(|p| p.openai.as_ref());
 
         // Convert toml::Value settings to serde_json::Value
         let settings = t
@@ -202,6 +205,8 @@ impl ParsedFile {
             cf_base_url: cf.and_then(|c| c.base_url.clone()),
             xai_api_key: xai.and_then(|x| x.api_key.clone()),
             xai_base_url: xai.and_then(|x| x.base_url.clone()),
+            openai_api_key: openai.and_then(|o| o.api_key.clone()),
+            openai_base_url: openai.and_then(|o| o.base_url.clone()),
             settings,
             path: Some(path.to_path_buf()),
         })
@@ -214,6 +219,7 @@ impl ParsedFile {
         let providers = j.provider.as_ref();
         let cf_entry = providers.and_then(|p| p.cloudflare.as_ref());
         let xai_entry = providers.and_then(|p| p.xai.as_ref());
+        let openai_entry = providers.and_then(|p| p.openai.as_ref());
 
         // Harvest CF account ID from multiple possible locations
         let cf_account_id = j
@@ -259,6 +265,17 @@ impl ParsedFile {
             .and_then(|x| x.options.as_ref())
             .and_then(|o| o.base_url.clone());
 
+        let openai_api_key = openai_entry.and_then(|o| {
+            o.options
+                .as_ref()
+                .and_then(|opts| opts.api_key.clone())
+                .or_else(|| o.api_key.clone())
+        });
+
+        let openai_base_url = openai_entry
+            .and_then(|o| o.options.as_ref())
+            .and_then(|opts| opts.base_url.clone());
+
         Some(ParsedFile {
             model: j.model,
             small_model: j.small_model,
@@ -269,6 +286,8 @@ impl ParsedFile {
             cf_base_url,
             xai_api_key,
             xai_base_url,
+            openai_api_key,
+            openai_base_url,
             settings: j.settings.unwrap_or_default(),
             path: Some(path.to_path_buf()),
         })
@@ -338,6 +357,8 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
     }
 
     // 3. Merge: project > global (project wins for each field)
+    // Credential fields skip template placeholders like "YOUR_CLOUDFLARE_API_TOKEN"
+    // so a project fusion.toml.example copy cannot override a real global key.
     let file_model = project_parsed.model.or(global_parsed.model);
     let file_small_model = project_parsed.small_model.or(global_parsed.small_model);
     let file_yolo = project_parsed.yolo.or(global_parsed.yolo);
@@ -345,35 +366,35 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
         .provider_default
         .or(global_parsed.provider_default);
 
-    let mut cf_account_id = env::var("CLOUDFLARE_ACCOUNT_ID").unwrap_or_default();
-    if cf_account_id.is_empty() {
-        cf_account_id = project_parsed
-            .cf_account_id
-            .or(global_parsed.cf_account_id)
-            .unwrap_or_default();
-    }
+    let cf_account_id = first_real_credential([
+        env::var("CLOUDFLARE_ACCOUNT_ID").ok(),
+        project_parsed.cf_account_id,
+        global_parsed.cf_account_id,
+    ]);
 
-    let mut cf_token = env::var("CLOUDFLARE_API_TOKEN")
-        .or_else(|_| env::var("CLOUDFLARE_AI_TOKEN"))
-        .unwrap_or_default();
-    if cf_token.is_empty() {
-        cf_token = project_parsed
-            .cf_api_key
-            .or(global_parsed.cf_api_key)
-            .unwrap_or_default();
-    }
+    let cf_token = first_real_credential([
+        env::var("CLOUDFLARE_API_TOKEN").ok(),
+        env::var("CLOUDFLARE_AI_TOKEN").ok(),
+        project_parsed.cf_api_key,
+        global_parsed.cf_api_key,
+    ]);
 
-    let xai_key = env::var("XAI_API_KEY").unwrap_or_default();
+    let xai_key = first_real_credential([
+        env::var("XAI_API_KEY").ok(),
+        project_parsed.xai_api_key,
+        global_parsed.xai_api_key,
+    ]);
 
-    let generic_key = env::var("FUSION_API_KEY")
-        .or_else(|_| env::var("ZENCODE_API_KEY"))
-        .unwrap_or_else(|_| {
-            if !xai_key.is_empty() {
-                xai_key.clone()
-            } else {
-                cf_token.clone()
-            }
-        });
+    let openai_key = first_real_credential([
+        env::var("OPENAI_API_KEY").ok(),
+        project_parsed.openai_api_key,
+        global_parsed.openai_api_key,
+    ]);
+
+    let generic_key = first_real_credential([
+        env::var("FUSION_API_KEY").ok(),
+        env::var("ZENCODE_API_KEY").ok(),
+    ]);
 
     // Provider detection
     let env_provider = env::var("FUSION_PROVIDER")
@@ -412,8 +433,10 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
     if provider == Provider::Auto {
         if !xai_key.is_empty() {
             provider = Provider::Xai;
-        } else if !cf_account_id.is_empty() && (!cf_token.is_empty() || !generic_key.is_empty()) {
+        } else if !cf_account_id.is_empty() && !cf_token.is_empty() {
             provider = Provider::Cloudflare;
+        } else if !openai_key.is_empty() {
+            provider = Provider::OpenAi;
         } else {
             provider = Provider::Cloudflare;
         }
@@ -428,12 +451,26 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
         .unwrap_or_default();
 
     if base_url.is_empty() {
-        base_url = project_parsed
-            .cf_base_url
-            .or(project_parsed.xai_base_url)
-            .or(global_parsed.cf_base_url)
-            .or(global_parsed.xai_base_url)
-            .unwrap_or_default();
+        base_url = match provider {
+            Provider::Xai => project_parsed
+                .xai_base_url
+                .or(global_parsed.xai_base_url)
+                .or(project_parsed.cf_base_url)
+                .or(global_parsed.cf_base_url)
+                .unwrap_or_default(),
+            Provider::OpenAi => project_parsed
+                .openai_base_url
+                .or(global_parsed.openai_base_url)
+                .or(project_parsed.cf_base_url)
+                .or(global_parsed.cf_base_url)
+                .unwrap_or_default(),
+            _ => project_parsed
+                .cf_base_url
+                .or(global_parsed.cf_base_url)
+                .or(project_parsed.xai_base_url)
+                .or(global_parsed.xai_base_url)
+                .unwrap_or_default(),
+        };
     }
 
     if provider == Provider::Xai && base_url.is_empty() {
@@ -453,10 +490,16 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
     let mut settings = global_parsed.settings;
     settings.extend(project_parsed.settings);
 
-    let final_api_key = if generic_key.is_empty() {
-        cf_token.clone()
-    } else {
+    // Provider-aware key selection. Generic env keys (FUSION_API_KEY) still win
+    // as an explicit override for any provider.
+    let final_api_key = if !generic_key.is_empty() {
         generic_key
+    } else {
+        match provider {
+            Provider::Xai => xai_key,
+            Provider::OpenAi => openai_key,
+            Provider::Cloudflare | Provider::Auto | Provider::Faux => cf_token,
+        }
     };
 
     let config_path = project_parsed.path.or(global_parsed.path);
@@ -478,46 +521,122 @@ pub fn load_config(cwd: &Path) -> Result<Config, FusionError> {
     })
 }
 
+/// True for empty strings and common config-template placeholders
+/// (e.g. `YOUR_CLOUDFLARE_API_TOKEN`, `xai-YOUR_KEY`).
+fn is_placeholder_value(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return true;
+    }
+    let upper = t.to_ascii_uppercase();
+    upper.contains("YOUR_")
+        || upper.contains("YOUR-")
+        || upper.contains("<YOUR")
+        || upper == "CHANGEME"
+        || upper == "CHANGE_ME"
+        || upper == "REPLACE_ME"
+        || upper == "TODO"
+        || upper == "XXX"
+}
+
+/// First non-placeholder credential in priority order.
+fn first_real_credential<I>(candidates: I) -> String
+where
+    I: IntoIterator<Item = Option<String>>,
+{
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|v| !is_placeholder_value(v))
+        .unwrap_or_default()
+}
+
 /// Save (upsert) an API key into the global config file at `~/.config/fusion/fusion.toml`.
 /// Preserves all existing content — only updates or inserts the `api_key` field under
-/// `[provider.cloudflare]` (and `[provider.xai]` if key looks like an xAI key).
-pub fn save_api_key(provider: Option<&str>, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// the matching `[provider.*]` section, and sets `[provider] default`.
+///
+/// For Cloudflare, pass `account_id` to also write `account_id` (required for Workers AI).
+pub fn save_api_key(
+    provider: Option<&str>,
+    key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    save_provider_credentials(provider, key, None)
+}
+
+/// Save provider credentials (API key + optional Cloudflare account ID) to
+/// `~/.config/fusion/fusion.toml`.
+///
+/// Creates `~/.config/fusion/` and `fusion.toml` if they do not exist yet.
+pub fn save_provider_credentials(
+    provider: Option<&str>,
+    key: &str,
+    account_id: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let home = dirs::home_dir().ok_or("cannot determine home directory")?;
     let config_dir = home.join(".config").join("fusion");
     std::fs::create_dir_all(&config_dir)?;
     let config_path = config_dir.join("fusion.toml");
+    save_provider_credentials_to(&config_path, provider, key, account_id)
+}
 
-    // Read existing content or start fresh
+/// Write provider credentials to an explicit config path (used by tests and save).
+///
+/// Creates parent directories and the file when missing.
+pub fn save_provider_credentials_to(
+    config_path: &Path,
+    provider: Option<&str>,
+    key: &str,
+    account_id: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Read existing content or start fresh (file may not exist yet)
     let existing = if config_path.exists() {
-        fs::read_to_string(&config_path)?
+        fs::read_to_string(config_path)?
     } else {
         String::new()
     };
 
-    // Determine target section
-    let section = if let Some(p) = provider {
+    let new_content = build_provider_credentials_toml(&existing, provider, key, account_id);
+    fs::write(config_path, new_content)?;
+    Ok(())
+}
+
+/// Build updated fusion.toml content from an existing file body (may be empty).
+fn build_provider_credentials_toml(
+    existing: &str,
+    provider: Option<&str>,
+    key: &str,
+    account_id: Option<&str>,
+) -> String {
+    // Determine target section + default provider name
+    let (section, default_name) = if let Some(p) = provider {
         match p.to_lowercase().as_str() {
-            "xai" => "[provider.xai]".to_string(),
-            "openai" => "[provider.openai]".to_string(),
-            _ => "[provider.cloudflare]".to_string(),
+            "xai" => ("[provider.xai]".to_string(), "xai"),
+            "openai" => ("[provider.openai]".to_string(), "openai"),
+            _ => ("[provider.cloudflare]".to_string(), "cloudflare"),
         }
+    } else if key.starts_with("xai-") {
+        ("[provider.xai]".to_string(), "xai")
+    } else if key.starts_with("sk-") {
+        ("[provider.openai]".to_string(), "openai")
     } else {
-        // Fallback heuristics
-        let is_xai = key.starts_with("xai-");
-        if is_xai {
-            "[provider.xai]".to_string()
-        } else {
-            "[provider.cloudflare]".to_string()
-        }
+        ("[provider.cloudflare]".to_string(), "cloudflare")
     };
 
     let is_cf = section == "[provider.cloudflare]";
+    let account_id = account_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !is_placeholder_value(s));
 
     let new_content = if existing.contains(&section) {
-        // Replace the api_key inside the existing section
+        // Replace the api_key (and account_id when provided) inside the existing section
         let mut result = String::new();
         let mut in_section = false;
         let mut key_written = false;
+        let mut account_written = account_id.is_none(); // skip if not provided
         for line in existing.lines() {
             let trimmed = line.trim();
             if trimmed == section {
@@ -526,45 +645,133 @@ pub fn save_api_key(provider: Option<&str>, key: &str) -> Result<(), Box<dyn std
                 result.push('\n');
                 continue;
             }
-            if in_section && trimmed.starts_with("api_key") {
-                result.push_str(&format!("api_key = \"{}\"\n", key));
-                key_written = true;
-                continue;
-            }
-            if in_section && trimmed.starts_with('[') && trimmed != section {
-                // Entering a new section — write key if not yet written
-                if !key_written {
+            if in_section {
+                // Match active or commented account_id lines so we can uncomment/update them.
+                let is_account_line = trimmed.starts_with("account_id")
+                    || trimmed.starts_with("# account_id")
+                    || trimmed.starts_with("#account_id");
+                if is_account_line {
+                    if let Some(id) = account_id {
+                        result.push_str(&format!("account_id = \"{}\"\n", id));
+                        account_written = true;
+                    } else {
+                        // Preserve existing account_id line when not updating it
+                        result.push_str(line);
+                        result.push('\n');
+                    }
+                    continue;
+                }
+                if trimmed.starts_with("api_key") {
                     result.push_str(&format!("api_key = \"{}\"\n", key));
                     key_written = true;
+                    continue;
                 }
-                in_section = false;
+                if trimmed.starts_with('[') && trimmed != section {
+                    // Entering a new section — write missing fields first
+                    if !account_written {
+                        if let Some(id) = account_id {
+                            result.push_str(&format!("account_id = \"{}\"\n", id));
+                        }
+                        account_written = true;
+                    }
+                    if !key_written {
+                        result.push_str(&format!("api_key = \"{}\"\n", key));
+                        key_written = true;
+                    }
+                    in_section = false;
+                }
             }
             result.push_str(line);
             result.push('\n');
         }
-        if in_section && !key_written {
-            result.push_str(&format!("api_key = \"{}\"\n", key));
+        if in_section {
+            if !account_written {
+                if let Some(id) = account_id {
+                    result.push_str(&format!("account_id = \"{}\"\n", id));
+                }
+            }
+            if !key_written {
+                result.push_str(&format!("api_key = \"{}\"\n", key));
+            }
         }
         result
     } else {
-        // Append the section
-        let mut result = existing.clone();
+        // Append the section (or create the whole file from empty)
+        let mut result = existing.to_string();
         if !result.is_empty() && !result.ends_with('\n') {
             result.push('\n');
         }
-        result.push('\n');
+        if !result.is_empty() {
+            result.push('\n');
+        }
         result.push_str(&section);
         result.push('\n');
-        // Add account_id placeholder for Cloudflare
         if is_cf {
-            result.push_str("# account_id = \"your-cloudflare-account-id\"\n");
+            if let Some(id) = account_id {
+                result.push_str(&format!("account_id = \"{}\"\n", id));
+            } else {
+                result.push_str("# account_id = \"your-cloudflare-account-id\"\n");
+            }
         }
         result.push_str(&format!("api_key = \"{}\"\n", key));
         result
     };
 
-    fs::write(&config_path, new_content)?;
-    Ok(())
+    // Ensure `[provider] default = "..."` is set so the saved provider is used.
+    upsert_provider_default(&new_content, default_name)
+}
+
+/// Insert or update `default = "<name>"` under the `[provider]` table.
+fn upsert_provider_default(content: &str, default_name: &str) -> String {
+    let mut result = String::new();
+    let mut in_provider = false;
+    let mut default_written = false;
+    let mut saw_provider = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[provider]" {
+            saw_provider = true;
+            in_provider = true;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        if in_provider {
+            if trimmed.starts_with("default") {
+                result.push_str(&format!("default = \"{}\"\n", default_name));
+                default_written = true;
+                continue;
+            }
+            // Nested tables like [provider.cloudflare] end the top-level [provider] section
+            if trimmed.starts_with('[') {
+                if !default_written {
+                    result.push_str(&format!("default = \"{}\"\n", default_name));
+                    default_written = true;
+                }
+                in_provider = false;
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    if in_provider && !default_written {
+        result.push_str(&format!("default = \"{}\"\n", default_name));
+        default_written = true;
+    }
+
+    if !saw_provider {
+        // Prepend a [provider] section so default is explicit.
+        let mut with_provider = String::new();
+        with_provider.push_str("[provider]\n");
+        with_provider.push_str(&format!("default = \"{}\"\n\n", default_name));
+        with_provider.push_str(&result);
+        return with_provider;
+    }
+
+    let _ = default_written;
+    result
 }
 
 
@@ -733,6 +940,10 @@ api_key = "xai-test-123"
 
         env::remove_var("XAI_API_KEY");
         env::remove_var("CLOUDFLARE_ACCOUNT_ID");
+        env::remove_var("CLOUDFLARE_API_TOKEN");
+        env::remove_var("CLOUDFLARE_AI_TOKEN");
+        env::remove_var("FUSION_API_KEY");
+        env::remove_var("ZENCODE_API_KEY");
         env::remove_var("FUSION_MODEL");
         env::remove_var("ZENCODE_MODEL");
         env::remove_var("FUSION_PROVIDER");
@@ -743,7 +954,171 @@ api_key = "xai-test-123"
         let cfg = load_config(&tmp).unwrap();
         assert_eq!(cfg.model, "grok-3");
         assert!(cfg.yolo);
+        assert_eq!(cfg.provider, Provider::Xai);
+        assert_eq!(cfg.api_key, "xai-test-123");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_placeholder_credentials_are_ignored() {
+        assert!(is_placeholder_value("YOUR_CLOUDFLARE_API_TOKEN"));
+        assert!(is_placeholder_value("YOUR_CLOUDFLARE_ACCOUNT_ID"));
+        assert!(is_placeholder_value("xai-YOUR_KEY"));
+        assert!(is_placeholder_value(""));
+        assert!(!is_placeholder_value("cfat_real_token_value"));
+        assert!(!is_placeholder_value("xai-abc123"));
+    }
+
+    #[test]
+    fn test_first_real_credential_skips_placeholders() {
+        assert_eq!(
+            first_real_credential([
+                Some("YOUR_CLOUDFLARE_API_TOKEN".into()),
+                Some("cfat_real_token".into()),
+            ]),
+            "cfat_real_token"
+        );
+        assert_eq!(
+            first_real_credential([
+                Some("YOUR_CLOUDFLARE_ACCOUNT_ID".into()),
+                None,
+                Some("abc123account".into()),
+            ]),
+            "abc123account"
+        );
+        assert!(first_real_credential([
+            Some("YOUR_CLOUDFLARE_API_TOKEN".into()),
+            Some("xai-YOUR_KEY".into()),
+            None,
+        ])
+        .is_empty());
+    }
+
+    #[test]
+    fn test_project_placeholders_are_not_loaded_as_credentials() {
+        // Project dir with only template placeholders. Global ~/.config may still
+        // supply a real key — assert the placeholder strings themselves never win.
+        let tmp = std::env::temp_dir().join("fusion-test-cfg-placeholders");
+        let _ = fs::create_dir_all(&tmp);
+
+        let toml_content = r#"
+model = "@cf/moonshotai/kimi-k2.7-code"
+
+[provider]
+default = "cloudflare"
+
+[provider.cloudflare]
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+api_key = "YOUR_CLOUDFLARE_API_TOKEN"
+"#;
+        fs::write(tmp.join("fusion.toml"), toml_content).unwrap();
+
+        // Clear env so file credentials would be used if not filtered.
+        env::remove_var("XAI_API_KEY");
+        env::remove_var("CLOUDFLARE_ACCOUNT_ID");
+        env::remove_var("CLOUDFLARE_API_TOKEN");
+        env::remove_var("CLOUDFLARE_AI_TOKEN");
+        env::remove_var("FUSION_API_KEY");
+        env::remove_var("ZENCODE_API_KEY");
+        env::remove_var("FUSION_MODEL");
+        env::remove_var("ZENCODE_MODEL");
+        env::remove_var("FUSION_PROVIDER");
+        env::remove_var("ZENCODE_PROVIDER");
+
+        let cfg = load_config(&tmp).unwrap();
+        assert_ne!(cfg.api_key, "YOUR_CLOUDFLARE_API_TOKEN");
+        assert!(!cfg.api_key.to_ascii_uppercase().contains("YOUR_"));
+        if let Some(ref id) = cfg.cloudflare_account_id {
+            assert_ne!(id, "YOUR_CLOUDFLARE_ACCOUNT_ID");
+            assert!(!id.to_ascii_uppercase().contains("YOUR_"));
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_upsert_provider_default() {
+        let content = r#"[provider.cloudflare]
+api_key = "cfat_test"
+"#;
+        let updated = upsert_provider_default(content, "cloudflare");
+        assert!(updated.contains("[provider]"));
+        assert!(updated.contains("default = \"cloudflare\""));
+        assert!(updated.contains("api_key = \"cfat_test\""));
+
+        let with_provider = r#"[provider]
+default = "xai"
+
+[provider.xai]
+api_key = "xai-old"
+"#;
+        let updated2 = upsert_provider_default(with_provider, "cloudflare");
+        assert!(updated2.contains("default = \"cloudflare\""));
+        assert!(!updated2.contains("default = \"xai\""));
+    }
+
+    #[test]
+    fn test_save_creates_toml_when_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "fusion-test-save-toml-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("fusion.toml");
+
+        // File must not exist yet
+        assert!(!path.exists());
+
+        save_provider_credentials_to(
+            &path,
+            Some("cloudflare"),
+            "cfat_new_token_value",
+            Some("acctid0123456789abcdef01234567"),
+        )
+        .unwrap();
+
+        assert!(path.exists(), "save must create fusion.toml when missing");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[provider]"));
+        assert!(content.contains("default = \"cloudflare\""));
+        assert!(content.contains("[provider.cloudflare]"));
+        assert!(content.contains("api_key = \"cfat_new_token_value\""));
+        assert!(content.contains("account_id = \"acctid0123456789abcdef01234567\""));
+
+        // Upsert on second save must update in place, not lose the file
+        save_provider_credentials_to(
+            &path,
+            Some("cloudflare"),
+            "cfat_updated_token",
+            Some("acctid0123456789abcdef01234567"),
+        )
+        .unwrap();
+        let content2 = fs::read_to_string(&path).unwrap();
+        assert!(content2.contains("api_key = \"cfat_updated_token\""));
+        assert!(!content2.contains("cfat_new_token_value"));
+
+        // xAI create-from-empty also works
+        let path_xai = tmp.join("xai.toml");
+        save_provider_credentials_to(&path_xai, Some("xai"), "xai-abc123", None).unwrap();
+        let xai = fs::read_to_string(&path_xai).unwrap();
+        assert!(xai.contains("[provider.xai]"));
+        assert!(xai.contains("default = \"xai\""));
+        assert!(xai.contains("api_key = \"xai-abc123\""));
+        assert!(!xai.contains("account_id"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_build_credentials_toml_from_empty() {
+        let content =
+            build_provider_credentials_toml("", Some("cloudflare"), "cfat_k", Some("acct_1"));
+        assert!(content.starts_with("[provider]\n"));
+        assert!(content.contains("default = \"cloudflare\""));
+        assert!(content.contains("[provider.cloudflare]"));
+        assert!(content.contains("account_id = \"acct_1\""));
+        assert!(content.contains("api_key = \"cfat_k\""));
     }
 }

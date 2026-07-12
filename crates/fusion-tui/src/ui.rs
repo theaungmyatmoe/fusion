@@ -1173,9 +1173,26 @@ fn wrap_lines<'a>(lines: Vec<Line<'a>>, width: usize) -> Vec<Line<'a>> {
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let input_block = Block::default()
+    let setup_title = app
+        .credential_setup
+        .as_ref()
+        .map(|s| s.input_hint());
+
+    let mut input_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border));
+        .border_style(Style::default().fg(if app.credential_setup.is_some() {
+            Color::Rgb(124, 58, 237)
+        } else {
+            theme.border
+        }));
+    if let Some(ref title) = setup_title {
+        input_block = input_block.title(Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(Color::Rgb(167, 139, 250))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let mut spans: Vec<Span> = Vec::new();
     let mut visual_len: u16 = 0;
@@ -1190,8 +1207,18 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     visual_len += 2;
 
     // Chronological scanner to parse and style tags/text inside app.input
+    // Mask secrets while collecting credentials so tokens don't linger on-screen.
     let text = if app.in_paste_burst {
         "[Pasted (pasting...)]".to_string()
+    } else if app.credential_setup.is_some() && !app.input.is_empty() {
+        let chars: Vec<char> = app.input.chars().collect();
+        let n = chars.len();
+        if n <= 4 {
+            "•".repeat(n)
+        } else {
+            let tail: String = chars[n - 4..].iter().collect();
+            format!("{}{}", "•".repeat(n - 4), tail)
+        }
     } else {
         app.input.clone()
     };
