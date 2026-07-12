@@ -115,6 +115,10 @@ fusion --upgrade          # Self-upgrade to the latest version
 | `Up` / `Down` | Cycle through input history |
 | `Backspace` | Atomically delete inline tag placeholders (e.g. `[Image #1]`) |
 
+## Roadmap
+
+Long-term plan (phases, milestones, architecture rules): **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+
 ## License
 
 MIT
