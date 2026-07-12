@@ -248,10 +248,28 @@ async fn main() -> anyhow::Result<()> {
         let mut agent = fusion_agent::agent::Agent::new(&config, cwd);
         let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
         let forwarder = tokio::spawn(async move {
+            use std::io::Write;
+            let mut streamed_text = false;
+            let mut streamed_tool_output = false;
             while let Some(event) = agent_rx.recv().await {
                 match event {
+                    fusion_agent::agent::AgentEvent::Thinking(text) => {
+                        eprint!("{}", text);
+                        let _ = std::io::stderr().flush();
+                    }
+                    fusion_agent::agent::AgentEvent::TextDelta(text) => {
+                        streamed_text = true;
+                        print!("{}", text);
+                        let _ = std::io::stdout().flush();
+                    }
                     fusion_agent::agent::AgentEvent::FinalResponse(text) => {
-                        println!("{}", text);
+                        if streamed_text {
+                            if !text.ends_with('\n') {
+                                println!();
+                            }
+                        } else {
+                            println!("{}", text);
+                        }
                     }
                     fusion_agent::agent::AgentEvent::ToolCall { name, args_preview } => {
                         let preview_truncated = if args_preview.chars().count() > 200 {
@@ -260,9 +278,22 @@ async fn main() -> anyhow::Result<()> {
                         } else {
                             args_preview.clone()
                         };
+                        streamed_tool_output = false;
                         eprintln!("[tool] {} {}", name, preview_truncated);
                     }
-                    _ => {}
+                    fusion_agent::agent::AgentEvent::ToolOutputDelta { name: _, output } => {
+                        streamed_tool_output = true;
+                        eprint!("{}", output);
+                        let _ = std::io::stderr().flush();
+                    }
+                    fusion_agent::agent::AgentEvent::ToolResult { name, output } => {
+                        if !streamed_tool_output {
+                            eprintln!("[tool result] {}\n{}", name, output);
+                        } else if !output.ends_with('\n') {
+                            eprintln!();
+                        }
+                    }
+                    fusion_agent::agent::AgentEvent::TodoUpdate(_) => {}
                 }
             }
         });

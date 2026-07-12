@@ -1416,9 +1416,17 @@ impl App {
         let tx = self.event_tx.clone();
         let agent = Arc::clone(&self.agent);
         let grill_mode_active = self.grill_mode;
+        let active_model = self.model.clone();
+        let active_max_tokens = lookup_model(&self.model)
+            .and_then(|info| info.max_tokens_for(self.token_level));
 
         let handle = tokio::spawn(async move {
             let mut agent = agent.lock().await;
+            // Apply UI runtime settings under the same lock as the turn.
+            if agent.model() != active_model {
+                agent.update_model(&active_model);
+            }
+            agent.set_max_tokens(active_max_tokens);
             let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
             
             let tx_clone = tx.clone();
@@ -1497,7 +1505,23 @@ impl App {
                 });
                 self.session.push_message("tool", &content);
             }
+            AgentEvent::ToolOutputDelta { name: _, output } => {
+                let cleaned = clean_output(&output);
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == "tool_result" {
+                        last.content.push_str(&cleaned);
+                        return;
+                    }
+                }
+                self.messages.push(Message {
+                    role: "tool_result".to_string(),
+                    content: cleaned,
+                });
+            }
             AgentEvent::ToolResult { name, output } => {
+                if self.messages.last().is_some_and(|m| m.role == "tool_result") {
+                    return;
+                }
                 let cleaned = clean_output(&output);
                 let truncated = if cleaned.chars().count() > 4000 {
                     let truncated_str: String = cleaned.chars().take(4000).collect();
@@ -1615,6 +1639,7 @@ impl App {
     fn handle_slash(&mut self, cmd: &str) {
         let lower = cmd.to_lowercase();
         let parts: Vec<&str> = lower.split_whitespace().collect();
+        let original_parts: Vec<&str> = cmd.split_whitespace().collect();
         let base = parts.first().copied().unwrap_or("");
 
         match base {
@@ -1821,7 +1846,7 @@ impl App {
                 self.show_provider_picker();
             }
             "/model" => {
-                if let Some(name) = parts.get(1) {
+                if let Some(name) = original_parts.get(1) {
                     let mut resolved_model = name.to_string();
                     if let Some(info) = lookup_model(name) {
                         resolved_model = info.full_id.to_string();

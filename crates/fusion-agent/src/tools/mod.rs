@@ -1,42 +1,56 @@
-pub mod read_file;
-pub mod write_file;
-pub mod search_replace;
-pub mod grep;
+pub mod apply_patch;
+pub mod browser_debug;
+pub mod fetch_url;
 pub mod get_symbols;
+pub mod glob;
+pub mod grep;
+pub mod read_file;
+pub mod search_replace;
+pub mod search_web;
 pub mod shell;
 pub mod todo;
-pub mod search_web;
-pub mod fetch_url;
-pub mod glob;
-pub mod browser_debug;
+pub mod write_file;
 
 /// Tool registry — maps tool names to their execution logic.
 pub struct ToolRegistry {
     cwd: String,
+    main_cwd: Option<String>,
     _keenable_api_key: Option<String>,
 }
 
 impl ToolRegistry {
-    pub fn new(cwd: &str, keenable_api_key: Option<String>) -> Self {
+    pub fn new(cwd: &str, main_cwd: Option<String>, keenable_api_key: Option<String>) -> Self {
         Self {
             cwd: cwd.to_string(),
+            main_cwd,
             _keenable_api_key: keenable_api_key,
         }
     }
 
     /// Execute a tool by name with the given arguments.
-    pub async fn execute(
+    pub async fn execute(&self, name: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.execute_streaming(name, args, None).await
+    }
+
+    /// Execute a tool and optionally emit output chunks while it is running.
+    pub async fn execute_streaming(
         &self,
         name: &str,
         args: &serde_json::Value,
+        output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<String, String> {
+        validate_arguments(name, args)?;
+
         match name {
-            "read_file" => read_file::execute(&self.cwd, args),
-            "write_file" => write_file::execute(&self.cwd, args),
-            "search_replace" => search_replace::execute(&self.cwd, args),
+            "read_file" => read_file::execute(&self.cwd, self.main_cwd.as_deref(), args),
+            "write_file" => write_file::execute(&self.cwd, self.main_cwd.as_deref(), args),
+            "search_replace" => search_replace::execute(&self.cwd, self.main_cwd.as_deref(), args),
+            "apply_patch" => apply_patch::execute(&self.cwd, self.main_cwd.as_deref(), args),
             "grep" => grep::execute(&self.cwd, args),
             "get_symbols" => get_symbols::execute(&self.cwd, args),
-            "run_command" => shell::execute(&self.cwd, args).await,
+            "run_command" => {
+                shell::execute_streaming(&self.cwd, self.main_cwd.as_deref(), args, output_tx).await
+            }
             "todo_write" => todo::execute(args),
             "search_web" => search_web::execute(args).await,
             "fetch_url" => fetch_url::execute(args).await,
@@ -45,6 +59,38 @@ impl ToolRegistry {
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
+}
+
+fn validate_arguments(name: &str, args: &serde_json::Value) -> Result<(), String> {
+    let required: &[&str] = match name {
+        "write_file" => &["path", "content"],
+        "search_replace" => &["path", "old_string", "new_string"],
+        "apply_patch" => &["patchText"],
+        "read_file" => &["path"],
+        "run_command" => &["command"],
+        _ => return Ok(()),
+    };
+
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|field| !args.get(*field).is_some_and(serde_json::Value::is_string))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let protocol_error = args
+        .get("_fusion_tool_error")
+        .and_then(serde_json::Value::as_str)
+        .map(|reason| format!(" Transport error: {}.", reason))
+        .unwrap_or_default();
+    Err(format!(
+        "Invalid {} call: missing required string field(s): {}.{} Resubmit exactly one corrected call with the documented schema; never retry with {{}}.",
+        name,
+        missing.join(", "),
+        protocol_error,
+    ))
 }
 
 /// Build the tool schemas to send to the LLM for function calling.
@@ -68,9 +114,10 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Create a new file or completely overwrite an existing file with new content.",
+                "description": "Create a new file or completely overwrite one file. Always provide both path and the complete content. Prefer search_replace for existing files.",
                 "parameters": {
                     "type": "object",
+                    "additionalProperties": false,
                     "properties": {
                         "path": { "type": "string", "description": "Path relative to project root" },
                         "content": { "type": "string", "description": "Complete content to write" }
@@ -83,15 +130,31 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "search_replace",
-                "description": "Precise, safe edit. old_string MUST appear EXACTLY ONCE. This is the only way to edit existing files.",
+                "description": "Precise, safe edit for existing files. old_string MUST appear EXACTLY ONCE. Prefer this over rewriting a whole file.",
                 "parameters": {
                     "type": "object",
+                    "additionalProperties": false,
                     "properties": {
                         "path": { "type": "string" },
                         "old_string": { "type": "string" },
                         "new_string": { "type": "string" }
                     },
                     "required": ["path", "old_string", "new_string"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "apply_patch",
+                "description": "Apply a compact multi-file patch. Prefer this for editing existing files. Format: *** Begin Patch, then *** Add File|Update File|Delete File sections, then *** End Patch.",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "patchText": { "type": "string", "description": "Complete OpenCode-style patch text" }
+                    },
+                    "required": ["patchText"]
                 }
             }
         }),
@@ -233,4 +296,21 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
             }
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_arguments;
+
+    #[test]
+    fn rejects_empty_write_file_arguments_with_schema_feedback() {
+        let args = serde_json::json!({
+            "_fusion_tool_error": "empty arguments"
+        });
+        let error = validate_arguments("write_file", &args).unwrap_err();
+
+        assert!(error.contains("path, content"));
+        assert!(error.contains("Transport error: empty arguments"));
+        assert!(error.contains("never retry with {}"));
+    }
 }

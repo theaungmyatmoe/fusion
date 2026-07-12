@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
 use futures::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
+use serde::{Deserialize, Serialize};
 
-use fusion_core::config::{Config, Provider, is_cloudflare_model};
+use fusion_core::config::{is_cloudflare_model, Config, Provider};
 use fusion_core::error::FusionError;
 
 /// A single chat message in the conversation.
@@ -105,12 +105,21 @@ pub enum LlmEvent {
 /// Unified LLM client that routes to the correct provider.
 pub struct LlmClient {
     config: Config,
+    http: reqwest::Client,
 }
 
 impl LlmClient {
     pub fn new(config: &Config) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(300))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             config: config.clone(),
+            http,
         }
     }
 
@@ -131,14 +140,14 @@ impl LlmClient {
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
     ) -> Result<ChatResult, FusionError> {
         let mut retries = 3;
-        let mut backoff = std::time::Duration::from_secs(3);
+        let mut backoff = std::time::Duration::from_secs(1);
 
         loop {
             match self.chat_attempt(options.clone(), event_tx.clone()).await {
                 Ok(res) => return Ok(res),
                 Err(e) => {
                     let err_msg = e.to_string();
-                    if retries > 0 && (err_msg.contains("429") || err_msg.contains("Too Many Requests")) {
+                    if retries > 0 && is_retryable_error(&err_msg) {
                         tokio::time::sleep(backoff).await;
                         retries -= 1;
                         backoff *= 2;
@@ -155,11 +164,16 @@ impl LlmClient {
         options: ChatOptions,
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
     ) -> Result<ChatResult, FusionError> {
-        let account_id = self.config.cloudflare_account_id.clone().unwrap_or_default();
+        let account_id = self
+            .config
+            .cloudflare_account_id
+            .clone()
+            .unwrap_or_default();
         let api_key = self.config.api_key.clone();
 
-        let is_cf = self.config.provider == Provider::Cloudflare || is_cloudflare_model(&self.config.model);
-        
+        let is_cf =
+            self.config.provider == Provider::Cloudflare || is_cloudflare_model(&self.config.model);
+
         let (url, auth_header) = if is_cf {
             if account_id.is_empty() {
                 return Err(FusionError::Llm(
@@ -199,12 +213,14 @@ impl LlmClient {
                 .or(Some(4096))
         });
 
+        let is_streaming = event_tx.is_some();
+
         // Construct request payload
         let mut body = serde_json::json!({
             "model": self.config.model,
-            "messages": serialize_messages(&options.messages),
+            "messages": serialize_messages(&options.messages, is_cf),
             "temperature": options.temperature.unwrap_or(0.4),
-            "stream": true,
+            "stream": is_streaming,
         });
 
         if let Some(max) = max_tokens {
@@ -215,16 +231,80 @@ impl LlmClient {
             body["tools"] = serde_json::json!(tools);
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(90))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
-        let request_builder = client
+        let request_builder = self
+            .http
             .post(&url)
             .header("Authorization", auth_header)
             .header("Content-Type", "application/json")
             .json(&body);
+
+        if !is_streaming {
+            let resp = request_builder
+                .send()
+                .await
+                .map_err(|e| FusionError::Llm(format!("Failed to send request: {}", e)))?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body_text = resp.text().await.unwrap_or_default();
+                return Err(FusionError::Llm(format!(
+                    "API error (Status {}): {}",
+                    status, body_text
+                )));
+            }
+
+            let response_json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| FusionError::Llm(format!("Failed to parse JSON response: {}", e)))?;
+
+            let mut accumulated_content = String::new();
+            let mut accumulated_reasoning = String::new();
+            let mut final_tool_calls = Vec::new();
+
+            if let Some(choices) = response_json.get("choices").and_then(|c| c.as_array()) {
+                if let Some(choice) = choices.first() {
+                    if let Some(message) = choice.get("message") {
+                        if let Some(content_str) = message.get("content").and_then(|c| c.as_str()) {
+                            accumulated_content = content_str.to_string();
+                        }
+
+                        let reasoning_str = message
+                            .get("reasoning_content")
+                            .or_else(|| message.get("reasoning"))
+                            .and_then(|r| r.as_str());
+                        if let Some(r_str) = reasoning_str {
+                            accumulated_reasoning = r_str.to_string();
+                        }
+
+                        if let Some(tool_calls_arr) =
+                            message.get("tool_calls").and_then(|t| t.as_array())
+                        {
+                            for tc_val in tool_calls_arr {
+                                if let Some(tool_call) = parse_complete_tool_call(tc_val) {
+                                    final_tool_calls.push(tool_call);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Apply the same text-based tool calling fallbacks
+            if final_tool_calls.is_empty() && !accumulated_content.is_empty() {
+                final_tool_calls = parse_fallback_tool_calls(&accumulated_content);
+            }
+
+            return Ok(ChatResult {
+                content: accumulated_content,
+                reasoning_content: if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_reasoning)
+                },
+                tool_calls: final_tool_calls,
+            });
+        }
 
         let mut event_source = EventSource::new(request_builder)
             .map_err(|e| FusionError::Llm(format!("Failed to connect to SSE stream: {}", e)))?;
@@ -247,17 +327,22 @@ impl LlmClient {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
                                     // content chunk
-                                    if let Some(content_str) = delta.get("content").and_then(|c| c.as_str()) {
+                                    if let Some(content_str) =
+                                        delta.get("content").and_then(|c| c.as_str())
+                                    {
                                         if !content_str.is_empty() {
                                             accumulated_content.push_str(content_str);
                                             if let Some(ref tx) = event_tx {
-                                                let _ = tx.send(LlmEvent::TextDelta(content_str.to_string()));
+                                                let _ = tx.send(LlmEvent::TextDelta(
+                                                    content_str.to_string(),
+                                                ));
                                             }
                                         }
                                     }
 
                                     // reasoning chunk
-                                    let reasoning_str = delta.get("reasoning_content")
+                                    let reasoning_str = delta
+                                        .get("reasoning_content")
                                         .or_else(|| delta.pointer("/choices/0/delta/reasoning"))
                                         .or_else(|| delta.get("reasoning"))
                                         .and_then(|r| r.as_str());
@@ -266,30 +351,35 @@ impl LlmClient {
                                         if !r_str.is_empty() {
                                             accumulated_reasoning.push_str(r_str);
                                             if let Some(ref tx) = event_tx {
-                                                let _ = tx.send(LlmEvent::Thinking(r_str.to_string()));
+                                                let _ =
+                                                    tx.send(LlmEvent::Thinking(r_str.to_string()));
                                             }
                                         }
                                     }
 
-                                    // tool_calls chunk
-                                    if let Some(tool_calls_arr) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-                                        for tc_val in tool_calls_arr {
-                                            let index = tc_val.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                                            if index >= accumulated_tool_calls.len() {
-                                                accumulated_tool_calls.resize(index + 1, ToolCallBuilder::default());
-                                            }
-                                            let builder = &mut accumulated_tool_calls[index];
-                                            if let Some(id) = tc_val.get("id").and_then(|i| i.as_str()) {
-                                                builder.id = id.to_string();
-                                            }
-                                            if let Some(name) = tc_val.pointer("/function/name").and_then(|n| n.as_str()) {
-                                                builder.name = name.to_string();
-                                            }
-                                            if let Some(args) = tc_val.pointer("/function/arguments").and_then(|a| a.as_str()) {
-                                                builder.arguments.push_str(args);
-                                            }
-                                        }
+                                    // OpenAI sends argument strings in fragments. Some compatible
+                                    // providers (including Cloudflare models) send a complete JSON
+                                    // object instead, so preserve both transport forms.
+                                    if let Some(tool_calls_arr) =
+                                        delta.get("tool_calls").and_then(|t| t.as_array())
+                                    {
+                                        accumulate_tool_call_deltas(
+                                            tool_calls_arr,
+                                            &mut accumulated_tool_calls,
+                                        );
                                     }
+                                }
+
+                                // A few compatible gateways put the completed tool call on the
+                                // choice message even while the response itself is streamed.
+                                if let Some(tool_calls_arr) = choice
+                                    .pointer("/message/tool_calls")
+                                    .and_then(|t| t.as_array())
+                                {
+                                    accumulate_tool_call_deltas(
+                                        tool_calls_arr,
+                                        &mut accumulated_tool_calls,
+                                    );
                                 }
                             }
                         }
@@ -297,21 +387,32 @@ impl LlmClient {
                 }
                 Err(e) => {
                     event_source.close();
-                    return Err(FusionError::Llm(format!("Stream error: {}", e)));
+                    let err_msg = match e {
+                        reqwest_eventsource::Error::InvalidStatusCode(status, resp) => {
+                            let body = resp.text().await.unwrap_or_default();
+                            format!("Invalid status code {}: {}", status, body)
+                        }
+                        other => other.to_string(),
+                    };
+                    return Err(FusionError::Llm(format!("Stream error: {}", err_msg)));
                 }
             }
         }
 
-        let final_tool_calls = accumulated_tool_calls
+        let mut final_tool_calls: Vec<ToolCall> = accumulated_tool_calls
             .into_iter()
             .filter(|b| !b.name.is_empty())
             .map(|b| ToolCall {
                 id: b.id,
                 name: b.name,
-                arguments: serde_json::from_str(&b.arguments)
-                    .unwrap_or(serde_json::Value::Object(Default::default())),
+                arguments: parse_accumulated_arguments(&b.arguments),
             })
             .collect();
+
+        // FALLBACK: Parse XML-style and plain-text tool calls from the text response body
+        if final_tool_calls.is_empty() && !accumulated_content.is_empty() {
+            final_tool_calls = parse_fallback_tool_calls(&accumulated_content);
+        }
 
         Ok(ChatResult {
             content: accumulated_content,
@@ -325,11 +426,102 @@ impl LlmClient {
     }
 }
 
+fn is_retryable_error(message: &str) -> bool {
+    [
+        "408",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "Too Many Requests",
+    ]
+    .iter()
+    .any(|status| message.contains(status))
+}
+
 #[derive(Default, Clone)]
 struct ToolCallBuilder {
     id: String,
     name: String,
     arguments: String,
+}
+
+fn parse_complete_tool_call(value: &serde_json::Value) -> Option<ToolCall> {
+    let name = value
+        .pointer("/function/name")
+        .or_else(|| value.get("name"))
+        .and_then(serde_json::Value::as_str)?;
+    let arguments = value
+        .pointer("/function/arguments")
+        .or_else(|| value.get("arguments"))
+        .map(parse_argument_value)
+        .unwrap_or_else(|| malformed_arguments("missing arguments"));
+
+    Some(ToolCall {
+        id: value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        name: name.to_string(),
+        arguments,
+    })
+}
+
+fn accumulate_tool_call_deltas(values: &[serde_json::Value], builders: &mut Vec<ToolCallBuilder>) {
+    for value in values {
+        let index = value
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        if index >= builders.len() {
+            builders.resize(index + 1, ToolCallBuilder::default());
+        }
+        let builder = &mut builders[index];
+
+        if let Some(id) = value.get("id").and_then(serde_json::Value::as_str) {
+            builder.id = id.to_string();
+        }
+        if let Some(name) = value
+            .pointer("/function/name")
+            .or_else(|| value.get("name"))
+            .and_then(serde_json::Value::as_str)
+        {
+            builder.name = name.to_string();
+        }
+        if let Some(arguments) = value
+            .pointer("/function/arguments")
+            .or_else(|| value.get("arguments"))
+        {
+            match arguments {
+                serde_json::Value::String(fragment) => builder.arguments.push_str(fragment),
+                serde_json::Value::Null => {}
+                complete => {
+                    builder.arguments = serde_json::to_string(complete).unwrap_or_default();
+                }
+            }
+        }
+    }
+}
+
+fn parse_argument_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(raw) => parse_accumulated_arguments(raw),
+        other => other.clone(),
+    }
+}
+
+fn parse_accumulated_arguments(raw: &str) -> serde_json::Value {
+    if raw.trim().is_empty() {
+        return malformed_arguments("empty arguments");
+    }
+    serde_json::from_str(raw)
+        .unwrap_or_else(|error| malformed_arguments(&format!("invalid argument JSON: {}", error)))
+}
+
+fn malformed_arguments(reason: &str) -> serde_json::Value {
+    serde_json::json!({ "_fusion_tool_error": reason })
 }
 
 fn extract_local_image_paths(content: &str) -> Vec<String> {
@@ -364,12 +556,53 @@ fn extract_local_image_paths(content: &str) -> Vec<String> {
     paths
 }
 
-fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
+fn serialize_messages(messages: &[ChatMessage], is_cf: bool) -> serde_json::Value {
     use base64::Engine;
 
     let mut serialized = Vec::new();
     for msg in messages {
         let mut map = serde_json::Map::new();
+
+        if is_cf {
+            if msg.role == "tool" {
+                map.insert("role".to_string(), serde_json::json!("user"));
+                map.insert(
+                    "content".to_string(),
+                    serde_json::json!(format!(
+                        "<tool_response name=\"{}\">{}</tool_response>",
+                        msg.name.as_deref().unwrap_or(""),
+                        msg.content
+                    )),
+                );
+                serialized.push(serde_json::Value::Object(map));
+                continue;
+            }
+
+            if msg.role == "assistant" && msg.tool_calls.is_some() {
+                map.insert("role".to_string(), serde_json::json!("assistant"));
+                let mut content = msg.content.clone();
+                if let Some(ref tcs) = msg.tool_calls {
+                    for tc in tcs {
+                        if !content.is_empty() {
+                            content.push_str("\n");
+                        }
+                        let args_str = if tc.arguments.is_string() {
+                            tc.arguments.as_str().unwrap_or_default().to_string()
+                        } else {
+                            serde_json::to_string(&tc.arguments).unwrap_or_default()
+                        };
+                        content.push_str(&format!(
+                            "<tool_call name=\"{}\">{}</tool_call>",
+                            tc.name, args_str
+                        ));
+                    }
+                }
+                map.insert("content".to_string(), serde_json::json!(content));
+                serialized.push(serde_json::Value::Object(map));
+                continue;
+            }
+        }
+
         map.insert("role".to_string(), serde_json::json!(msg.role));
 
         if msg.role == "user" {
@@ -388,8 +621,13 @@ fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
                     let path = std::path::Path::new(&path_str);
                     if path.exists() && path.is_file() {
                         if let Ok(bytes) = std::fs::read(path) {
-                            let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+                            let base64_data =
+                                base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            let ext = path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("png")
+                                .to_lowercase();
                             let media_type = match ext.as_str() {
                                 "jpg" | "jpeg" => "image/jpeg",
                                 "webp" => "image/webp",
@@ -407,7 +645,10 @@ fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
                     }
                 }
 
-                map.insert("content".to_string(), serde_json::Value::Array(content_parts));
+                map.insert(
+                    "content".to_string(),
+                    serde_json::Value::Array(content_parts),
+                );
             } else {
                 map.insert("content".to_string(), serde_json::json!(msg.content));
             }
@@ -449,6 +690,78 @@ fn serialize_messages(messages: &[ChatMessage]) -> serde_json::Value {
         serialized.push(serde_json::Value::Object(map));
     }
     serde_json::Value::Array(serialized)
+}
+
+fn parse_first_json_object(input: &str) -> Option<(serde_json::Value, usize)> {
+    let start = input.find('{')?;
+    let mut stream =
+        serde_json::Deserializer::from_str(&input[start..]).into_iter::<serde_json::Value>();
+    let value = stream.next()?.ok()?;
+    Some((value, start + stream.byte_offset()))
+}
+
+/// Helper function to parse fallback tool calls from natural text or XML tags.
+/// Invalid or truncated payloads are ignored rather than executed as `{}`.
+pub(crate) fn parse_fallback_tool_calls(accumulated_content: &str) -> Vec<ToolCall> {
+    let mut final_tool_calls = Vec::new();
+
+    // Pattern 1: <tool_call name="...">...</tool_call>
+    let mut search_content = accumulated_content;
+    while let Some(start_idx) = search_content.find("<tool_call name=\"") {
+        let name_start = start_idx + 17;
+        if let Some(name_end) = search_content[name_start..].find("\"") {
+            let tool_name = &search_content[name_start..name_start + name_end];
+            let rest = &search_content[name_start + name_end + 2..];
+            if let Some((arguments, consumed)) = parse_first_json_object(rest) {
+                final_tool_calls.push(ToolCall {
+                    id: format!(
+                        "call_fb_{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    ),
+                    name: tool_name.to_string(),
+                    arguments,
+                });
+                search_content = &rest[consumed..];
+                continue;
+            }
+        }
+        break;
+    }
+
+    // Pattern 2: Calling tool [name] with arguments: [JSON]
+    if final_tool_calls.is_empty() {
+        let mut search_content = accumulated_content;
+        while let Some(start_idx) = search_content.find("Calling tool ") {
+            let name_start = start_idx + 13;
+            if let Some(with_args_idx) = search_content[name_start..].find(" with arguments:") {
+                let tool_name = search_content[name_start..name_start + with_args_idx]
+                    .trim()
+                    .to_string();
+                let rest = &search_content[name_start + with_args_idx + 16..];
+                if let Some((arguments, consumed)) = parse_first_json_object(rest) {
+                    final_tool_calls.push(ToolCall {
+                        id: format!(
+                            "call_fb_{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                        ),
+                        name: tool_name,
+                        arguments,
+                    });
+                    search_content = &rest[consumed..];
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    final_tool_calls
 }
 
 /// Convenience constructor.
@@ -494,15 +807,21 @@ mod tests {
         let img_path = temp_dir.join("test_vision_img.png");
         let _ = std::fs::write(&img_path, b"fake_png_data");
 
-        let prompt = format!("Explain this: [image 1](file://{})", img_path.to_string_lossy());
+        let prompt = format!(
+            "Explain this: [image 1](file://{})",
+            img_path.to_string_lossy()
+        );
         let messages = vec![ChatMessage::user(prompt)];
 
-        let serialized = serialize_messages(&messages);
+        let serialized = serialize_messages(&messages, false);
         let content_arr = serialized[0]["content"].as_array().unwrap();
 
         assert_eq!(content_arr.len(), 2);
         assert_eq!(content_arr[0]["type"], "text");
-        assert!(content_arr[0]["text"].as_str().unwrap().contains("Explain this:"));
+        assert!(content_arr[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Explain this:"));
 
         assert_eq!(content_arr[1]["type"], "image_url");
         let url = content_arr[1]["image_url"]["url"].as_str().unwrap();
@@ -510,5 +829,84 @@ mod tests {
         assert!(url.contains("ZmFrZV9wbmdfZGF0YQ==")); // base64 of "fake_png_data"
 
         let _ = std::fs::remove_file(img_path);
+    }
+
+    #[test]
+    fn test_parse_fallback_tool_calls() {
+        // Test standard XML tag parsing with closing tag
+        let content = "<tool_call name=\"write_file\">{\"path\": \"src/index.css\", \"content\": \"body {}\"}</tool_call>";
+        let calls = parse_fallback_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write_file");
+        assert_eq!(calls[0].arguments["path"], "src/index.css");
+
+        // Test truncated XML tag without closing tag
+        let content = "<tool_call name=\"delegate_write\">{\"task_description\": \"Build fitness page\", \"files\": [\"index.html\"]}";
+        let calls = parse_fallback_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "delegate_write");
+        assert_eq!(calls[0].arguments["files"][0], "index.html");
+
+        // Test nested braces parsing
+        let content = "<tool_call name=\"run_command\">{\"command\": \"npm run build\", \"env\": {\"NODE_ENV\": \"production\"}}";
+        let calls = parse_fallback_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "run_command");
+        assert_eq!(calls[0].arguments["env"]["NODE_ENV"], "production");
+
+        // Test plain-text fallback format (Calling tool ...)
+        let content = "I will write the code now. Calling tool search_replace with arguments: {\"path\": \"index.js\", \"old\": \"a\", \"new\": \"b\"}";
+        let calls = parse_fallback_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "search_replace");
+        assert_eq!(calls[0].arguments["new"], "b");
+
+        // Invalid/truncated JSON must never become an executable empty call.
+        let content = "<tool_call name=\"write_file\">{\"path\": \"index.css\", \"content\":";
+        assert!(parse_fallback_tool_calls(content).is_empty());
+    }
+
+    #[test]
+    fn test_streamed_object_tool_arguments_are_preserved() {
+        let values = vec![serde_json::json!({
+            "index": 0,
+            "id": "call_write",
+            "function": {
+                "name": "write_file",
+                "arguments": {
+                    "path": "src/index.css",
+                    "content": "body { color: red; }"
+                }
+            }
+        })];
+        let mut builders = Vec::new();
+
+        accumulate_tool_call_deltas(&values, &mut builders);
+        let builder = builders.pop().unwrap();
+        let arguments = parse_accumulated_arguments(&builder.arguments);
+
+        assert_eq!(builder.name, "write_file");
+        assert_eq!(arguments["path"], "src/index.css");
+        assert_eq!(arguments["content"], "body { color: red; }");
+    }
+
+    #[test]
+    fn test_streamed_string_tool_arguments_are_joined() {
+        let first = vec![serde_json::json!({
+            "index": 0,
+            "function": { "name": "write_file", "arguments": "{\"path\":\"a.css\"," }
+        })];
+        let second = vec![serde_json::json!({
+            "index": 0,
+            "function": { "arguments": "\"content\":\"x\"}" }
+        })];
+        let mut builders = Vec::new();
+
+        accumulate_tool_call_deltas(&first, &mut builders);
+        accumulate_tool_call_deltas(&second, &mut builders);
+        let arguments = parse_accumulated_arguments(&builders[0].arguments);
+
+        assert_eq!(arguments["path"], "a.css");
+        assert_eq!(arguments["content"], "x");
     }
 }

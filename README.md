@@ -56,6 +56,13 @@ api_key = "your_api_token"
 
 [provider.xai]
 api_key = "xai-your-key"
+
+[settings]
+# Optional agent/delegation tuning
+agent_pacing_ms = 0
+subagent_max_rounds = 12
+subagent_timeout_secs = 900
+subagent_verify_timeout_secs = 120
 ```
 
 ### Environment Variables

@@ -34,3 +34,12 @@ api_key = "YOUR_CLOUDFLARE_API_TOKEN"
 
 [settings]
 # theme = "system"
+
+# Agent runtime tuning. Sub-agent responses stream through the same API event path
+# as the parent. Keep the child focused and bounded for fast failure recovery.
+# agent_max_rounds = 25
+# agent_pacing_ms = 0
+# subagent_max_rounds = 12
+# subagent_max_tokens = 16384
+# subagent_timeout_secs = 900
+# subagent_verify_timeout_secs = 120

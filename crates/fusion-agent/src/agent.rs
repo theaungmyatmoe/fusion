@@ -1,10 +1,8 @@
 use fusion_core::config::Config;
 use fusion_core::error::FusionError;
-use fusion_llm::client::{ChatMessage, ChatOptions, create_llm_client, LlmClient};
+use fusion_llm::client::{create_llm_client, ChatMessage, ChatOptions, LlmClient};
 
-use crate::tools::{ToolRegistry, build_tool_schemas};
-
-
+use crate::tools::{build_tool_schemas, ToolRegistry};
 
 /// Events emitted by the agent for the TUI to render.
 #[derive(Debug, Clone)]
@@ -12,6 +10,7 @@ pub enum AgentEvent {
     Thinking(String),
     TextDelta(String),
     ToolCall { name: String, args_preview: String },
+    ToolOutputDelta { name: String, output: String },
     ToolResult { name: String, output: String },
     FinalResponse(String),
     TodoUpdate(Vec<TodoItem>),
@@ -33,6 +32,8 @@ pub struct Agent {
     cwd: String,
     tool_registry: ToolRegistry,
     pub arbitrage_mode: bool,
+    max_rounds: usize,
+    max_tokens: Option<u32>,
 }
 
 const TERMUX_API_SKILL: &str = include_str!("termux_api_skill.md");
@@ -47,7 +48,7 @@ impl Agent {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .or_else(|| std::env::var("KEENABLE_API_KEY").ok());
-        let tool_registry = ToolRegistry::new(&cwd, keenable_api_key);
+        let tool_registry = ToolRegistry::new(&cwd, None, keenable_api_key);
 
         Self {
             config: config.clone(),
@@ -57,18 +58,23 @@ impl Agent {
             cwd,
             tool_registry,
             arbitrage_mode: true,
+            max_rounds: setting_u64(config, "agent_max_rounds", 25).max(1) as usize,
+            max_tokens: None,
         }
     }
 
     /// Process a user message through the agent loop.
-    pub async fn process(
+    pub fn process(
         &mut self,
         user_message: &str,
         tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    ) -> Result<(), FusionError> {
-        // Initialize system prompt on first message
-        if self.messages.is_empty() {
-            let mut sys_prompt = format!(
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FusionError>> + Send + '_>>
+    {
+        let user_message = user_message.to_string();
+        Box::pin(async move {
+            // Initialize system prompt on first message
+            if self.messages.is_empty() {
+                let mut sys_prompt = format!(
                 "You are Fusion, a powerful, autonomous coding agent optimized for terminal environments.\n\
                  You are currently running with the LLM model: {}.\n\n\
                  ENVIRONMENT:\n\
@@ -103,41 +109,51 @@ impl Agent {
                  Do not keep calling tools indefinitely — be efficient and wrap up.",
                  self.config.model
             );
-            // Load any specialized local or global skills
-            let skills = fusion_core::config::load_skills(&self.cwd);
-            if !skills.is_empty() {
-                sys_prompt.push_str("\n\nAVAILABLE SPECIALIZED SKILLS AND BEST PRACTICES:\n");
-                for (name, content) in skills {
-                    sys_prompt.push_str(&format!("--- SKILL: {} ---\n{}\n\n", name, content));
+                // Load any specialized local or global skills
+                let skills = fusion_core::config::load_skills(&self.cwd);
+                if !skills.is_empty() {
+                    sys_prompt.push_str("\n\nAVAILABLE SPECIALIZED SKILLS AND BEST PRACTICES:\n");
+                    for (name, content) in skills {
+                        sys_prompt.push_str(&format!("--- SKILL: {} ---\n{}\n\n", name, content));
+                    }
                 }
-            }
 
-            // Load user taste preferences (personal coding styles)
-            let taste_rules = fusion_core::taste::load_taste_rules(std::path::Path::new(&self.cwd));
-            sys_prompt.push_str("\n\nUSER CODING STYLE PREFERENCES (TASTE PROFILE):\n");
-            if !taste_rules.is_empty() {
-                sys_prompt.push_str("Align all your code generations and edits to match these choices:\n");
-                for rule in taste_rules {
-                    sys_prompt.push_str(&format!("- {} (Confidence: {:.2})\n", rule.rule, rule.confidence));
-                }
-            } else {
-                sys_prompt.push_str("Align your code to these default engineering taste guidelines:\n\
+                // Load user taste preferences (personal coding styles)
+                let taste_rules =
+                    fusion_core::taste::load_taste_rules(std::path::Path::new(&self.cwd));
+                sys_prompt.push_str("\n\nUSER CODING STYLE PREFERENCES (TASTE PROFILE):\n");
+                if !taste_rules.is_empty() {
+                    sys_prompt.push_str(
+                        "Align all your code generations and edits to match these choices:\n",
+                    );
+                    for rule in taste_rules {
+                        sys_prompt.push_str(&format!(
+                            "- {} (Confidence: {:.2})\n",
+                            rule.rule, rule.confidence
+                        ));
+                    }
+                } else {
+                    sys_prompt.push_str("Align your code to these default engineering taste guidelines:\n\
                                      - Prefer clean, self-documenting code with minimal, high-value comments.\n\
                                      - Write small, modular functions and components with a single clear responsibility.\n\
                                      - Use highly descriptive and clear naming for variables, functions, and files.\n\
                                      - Write robust error handling; avoid unwrap() or panics in production code.\n");
-            }
-
-            // Load user design preferences (UI/design patterns)
-            let design_rules = fusion_core::design::load_design_rules(std::path::Path::new(&self.cwd));
-            sys_prompt.push_str("\n\nUSER DESIGN PREFERENCES (DESIGN PROFILE):\n");
-            if !design_rules.is_empty() {
-                sys_prompt.push_str("Match all UI code, styling, and component choices to these design preferences:\n");
-                for rule in design_rules {
-                    sys_prompt.push_str(&format!("- {} (Confidence: {:.2})\n", rule.rule, rule.confidence));
                 }
-            } else {
-                sys_prompt.push_str("Match all UI code, styling, and component choices to these world-class design principles:\n\
+
+                // Load user design preferences (UI/design patterns)
+                let design_rules =
+                    fusion_core::design::load_design_rules(std::path::Path::new(&self.cwd));
+                sys_prompt.push_str("\n\nUSER DESIGN PREFERENCES (DESIGN PROFILE):\n");
+                if !design_rules.is_empty() {
+                    sys_prompt.push_str("Match all UI code, styling, and component choices to these design preferences:\n");
+                    for rule in design_rules {
+                        sys_prompt.push_str(&format!(
+                            "- {} (Confidence: {:.2})\n",
+                            rule.rule, rule.confidence
+                        ));
+                    }
+                } else {
+                    sys_prompt.push_str("Match all UI code, styling, and component choices to these world-class design principles:\n\
                                  VISUAL HIERARCHY & SPACING:\n\
                                  - Use an 8-point grid system for all spacing (8px, 16px, 24px, 32px, 48px, 64px).\n\
                                  - Establish clear hierarchy with 3 levels: primary (heading), secondary (body), tertiary (caption/meta).\n\
@@ -184,11 +200,10 @@ impl Agent {
                                  - 'transition: all' — always specify exact properties.\n\
                                  - Placeholder text as labels. Always use real labels.\n\
                                  - Neon glow effects on text.\n");
+                }
 
-            }
-
-            // Always embed Emil Kowalski's Design Engineering Principles by default
-            sys_prompt.push_str("\nDESIGN ENGINEERING PRINCIPLES (EMIL KOWALSKI PHILOSOPHY):\n\
+                // Always embed Emil Kowalski's Design Engineering Principles by default
+                sys_prompt.push_str("\nDESIGN ENGINEERING PRINCIPLES (EMIL KOWALSKI PHILOSOPHY):\n\
                                  Apply these motion and UI polish standards to all interface work:\n\
                                  - Never animate keyboard-initiated actions (command palette, shortcuts) — keep them instant.\n\
                                  - Specify exact transition properties; avoid 'transition: all' for clean performance.\n\
@@ -198,55 +213,57 @@ impl Agent {
                                  - Origin-aware popovers: scale from their trigger, not the center.\n\
                                  - UI animations must remain under 300ms (100-160ms for button press, 150-250ms for dropdowns/selects, 200-500ms for modals/drawers).\n");
 
-
-            if fusion_core::config::is_termux() {
-                sys_prompt.push_str(
+                if fusion_core::config::is_termux() {
+                    sys_prompt.push_str(
                     "\n\nTERMUX ENVIRONMENT PATHS:\n\
                      - Standard Linux paths like /bin/bash, /bin/sh, or /tmp DO NOT EXIST natively in Termux.\n\
                      - Always write shebangs in scripts as '#!/usr/bin/env bash' or '#!/usr/bin/env python' instead of hardcoded '/bin/bash'.\n\
                      - Create temporary files inside the current directory or under the Termux prefix ($PREFIX/tmp) instead of /tmp.\n\
                      - Termux utilities and binaries are located under the prefix '/data/data/com.termux/files/usr/'.\n"
                 );
-                sys_prompt.push_str("\n\nTERMUX API SKILL AND BEST PRACTICES:\n");
-                sys_prompt.push_str(TERMUX_API_SKILL);
-            } else if fusion_core::config::is_ish() {
-                sys_prompt.push_str(
+                    sys_prompt.push_str("\n\nTERMUX API SKILL AND BEST PRACTICES:\n");
+                    sys_prompt.push_str(TERMUX_API_SKILL);
+                } else if fusion_core::config::is_ish() {
+                    sys_prompt.push_str(
                     "\n\niSH (iOS ALPINE) ENVIRONMENT PATHS:\n\
                      - Standard bash is not installed by default. Always write scripts using '#!/bin/sh' or install bash via 'apk add bash' first.\n\
                      - Keep memory and disk writes low since iOS terminates long/heavy CPU-intensive processes.\n"
                 );
-            }
+                }
 
-            if self.arbitrage_mode {
-                sys_prompt.push_str(
+                if self.arbitrage_mode {
+                    sys_prompt.push_str(
                     "\n\nTOKEN ARBITRAGE MODE (ACTIVE):\n\
                      - You are the Premium Auditor/Planner model.\n\
                      - Your role is restricted to specification, planning, and validation/judgement.\n\
                      - **CRITICAL**: Do NOT use direct code writing tools (like write_file or search_replace) yourself. Instead, delegate ALL code writing and file editing tasks to the cheaper fast model by using the `delegate_write` tool.\n\
+                     - **CRITICAL**: You MUST call the `delegate_write` tool using the structured tool/function call mechanism. Do NOT write out the tool call or its JSON arguments in your text response, as it will not be executed by the system. Always use the native tool calling capability.\n\
                      - When calling `delegate_write`, provide a clear, step-by-step description of the coding task, lists of files, and a test/build acceptance command.\n\
                      - After the `delegate_write` tool returns, review the returned git diff and verification outcomes. If there are remaining errors, call `delegate_write` again to fix them or refine the code.\n"
                 );
+                }
+
+                self.messages.push(ChatMessage::system(sys_prompt));
             }
 
-            self.messages.push(ChatMessage::system(sys_prompt));
-        }
+            self.messages.push(ChatMessage::user(user_message));
 
-        self.messages.push(ChatMessage::user(user_message));
-
-        let mut tool_schemas = build_tool_schemas();
-        if self.arbitrage_mode {
-            // Remove write_file and search_replace to force delegation
-            tool_schemas.retain(|schema| {
-                if let Some(func) = schema.get("function") {
-                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                        return name != "write_file" && name != "search_replace";
+            let mut tool_schemas = build_tool_schemas();
+            if self.arbitrage_mode {
+                // Remove write_file and search_replace to force delegation
+                tool_schemas.retain(|schema| {
+                    if let Some(func) = schema.get("function") {
+                        if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                            return name != "write_file"
+                                && name != "search_replace"
+                                && name != "apply_patch";
+                        }
                     }
-                }
-                true
-            });
+                    true
+                });
 
-            // Add delegate_write tool schema
-            tool_schemas.push(serde_json::json!({
+                // Add delegate_write tool schema
+                tool_schemas.push(serde_json::json!({
                 "type": "function",
                 "function": {
                     "name": "delegate_write",
@@ -272,42 +289,158 @@ impl Agent {
                     }
                 }
             }));
-        }
-        let max_rounds = 25;
-
-        for round in 0..max_rounds {
-            // Pacing delay to avoid triggering Cloudflare burst rate limits during tool use
-            if round > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
             }
+            let max_rounds = self.max_rounds;
 
-            // Inject a wrap-up nudge when running low on rounds
-            if round == max_rounds - 2 {
-                self.messages.push(ChatMessage::system(
+            for round in 0..max_rounds {
+                // Provider retries handle normal rate limits. Optional pacing remains available
+                // for unusually strict gateways without slowing every Cloudflare request by default.
+                let pacing_ms = setting_u64(&self.config, "agent_pacing_ms", 0);
+                if round > 0 && pacing_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(pacing_ms)).await;
+                }
+
+                // Inject a wrap-up nudge when running low on rounds
+                if round == max_rounds.saturating_sub(2) {
+                    self.messages.push(ChatMessage::system(
                     "IMPORTANT: You are running low on remaining rounds. \
                      Finish up your current work and provide a final text answer \
                      summarizing what you have done. Do NOT call more tools unless absolutely necessary."
                 ));
+                }
+
+                // Boost max_tokens on final rounds so the model has enough budget to conclude
+                let max_tokens = if round >= max_rounds.saturating_sub(3) {
+                    Some(self.max_tokens.unwrap_or(16384).max(16384))
+                } else {
+                    self.max_tokens
+                };
+
+                let options = ChatOptions {
+                    messages: self.messages.clone(),
+                    tools: Some(tool_schemas.clone()),
+                    temperature: Some(0.4),
+                    max_tokens,
+                };
+
+                let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel();
+                let tx_clone = tx.clone();
+
+                // Spawn background task to forward streaming events to TUI in real-time
+                let forwarder = tokio::spawn(async move {
+                    while let Some(llm_event) = llm_rx.recv().await {
+                        match llm_event {
+                            fusion_llm::client::LlmEvent::Thinking(chunk) => {
+                                let _ = tx_clone.send(AgentEvent::Thinking(chunk));
+                            }
+                            fusion_llm::client::LlmEvent::TextDelta(chunk) => {
+                                let _ = tx_clone.send(AgentEvent::TextDelta(chunk));
+                            }
+                        }
+                    }
+                });
+
+                let result = match self.llm.chat(options, Some(llm_tx)).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        let _ = forwarder.await;
+                        return Err(e);
+                    }
+                };
+                let _ = forwarder.await;
+
+                // Handle tool calls
+                if !result.tool_calls.is_empty() {
+                    // Add assistant message with tool calls populated
+                    self.messages.push(ChatMessage::assistant_with_tools(
+                        result.content.clone(),
+                        result.tool_calls.clone(),
+                    ));
+
+                    for tc in &result.tool_calls {
+                        let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
+                        let preview = if args_str.chars().count() > 200 {
+                            let truncated: String = args_str.chars().take(200).collect();
+                            format!("{}...", truncated)
+                        } else {
+                            args_str.clone()
+                        };
+
+                        let _ = tx.send(AgentEvent::ToolCall {
+                            name: tc.name.clone(),
+                            args_preview: preview,
+                        });
+
+                        // Execute the tool
+                        let output = if tc.name == "delegate_write" {
+                            self.execute_delegate_write(&tc.arguments, tx.clone()).await
+                        } else {
+                            execute_tool_streaming(
+                                &self.tool_registry,
+                                &tc.name,
+                                &tc.arguments,
+                                &tc.name,
+                                &tx,
+                            )
+                            .await
+                            .unwrap_or_else(|e| format!("Tool execution error: {}", e))
+                        };
+
+                        let _ = tx.send(AgentEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: output.clone(),
+                        });
+
+                        // Handle todo updates
+                        if tc.name == "todo_write" {
+                            if let Ok(items) = serde_json::from_value::<Vec<TodoItem>>(
+                                tc.arguments["todos"].clone(),
+                            ) {
+                                self.todos = items.clone();
+                                let _ = tx.send(AgentEvent::TodoUpdate(items));
+                            }
+                        }
+
+                        self.messages.push(ChatMessage {
+                            role: "tool".to_string(),
+                            content: format!("Tool {} result:\n{}", tc.name, output),
+                            name: Some(tc.name.clone()),
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_calls: None,
+                        });
+                    }
+                    continue; // next round
+                }
+
+                // Final response (no tool calls)
+                let final_text = if result.content.is_empty() {
+                    "(no response)".to_string()
+                } else {
+                    result.content.clone()
+                };
+
+                self.messages.push(ChatMessage::assistant(&final_text));
+                let _ = tx.send(AgentEvent::FinalResponse(final_text));
+                return Ok(());
             }
 
-            // Boost max_tokens on final rounds so the model has enough budget to conclude
-            let max_tokens = if round >= max_rounds - 3 {
-                Some(16384)
-            } else {
-                None
-            };
+            // Force one final LLM call WITHOUT tools to guarantee a text summary
+            self.messages.push(ChatMessage::system(
+                "You have exhausted all available tool rounds. \
+             You MUST now provide a final text response summarizing \
+             what you accomplished and any remaining work. \
+             Do NOT attempt any tool calls.",
+            ));
 
-            let options = ChatOptions {
+            let final_options = ChatOptions {
                 messages: self.messages.clone(),
-                tools: Some(tool_schemas.clone()),
+                tools: None, // No tools — forces text-only response
                 temperature: Some(0.4),
-                max_tokens,
+                max_tokens: Some(16384),
             };
 
             let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel();
             let tx_clone = tx.clone();
-            
-            // Spawn background task to forward streaming events to TUI in real-time
             let forwarder = tokio::spawn(async move {
                 while let Some(llm_event) = llm_rx.recv().await {
                     match llm_event {
@@ -321,131 +454,25 @@ impl Agent {
                 }
             });
 
-            let result = match self.llm.chat(options, Some(llm_tx)).await {
-                Ok(res) => res,
-                Err(e) => {
+            match self.llm.chat(final_options, Some(llm_tx)).await {
+                Ok(result) => {
                     let _ = forwarder.await;
-                    return Err(e);
-                }
-            };
-            let _ = forwarder.await;
-
-            // Handle tool calls
-            if !result.tool_calls.is_empty() {
-                // Add assistant message with tool calls populated
-                self.messages
-                    .push(ChatMessage::assistant_with_tools(result.content.clone(), result.tool_calls.clone()));
-
-                for tc in &result.tool_calls {
-                    let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
-                    let preview = if args_str.chars().count() > 200 {
-                        let truncated: String = args_str.chars().take(200).collect();
-                        format!("{}...", truncated)
+                    let final_text = if result.content.is_empty() {
+                        "Agent completed all rounds. No further summary available.".to_string()
                     } else {
-                        args_str.clone()
+                        result.content
                     };
-
-                    let _ = tx.send(AgentEvent::ToolCall {
-                        name: tc.name.clone(),
-                        args_preview: preview,
-                    });
-
-                    // Execute the tool
-                    let output = if tc.name == "delegate_write" {
-                        self.execute_delegate_write(&tc.arguments, tx.clone()).await
-                    } else {
-                        self.tool_registry
-                            .execute(&tc.name, &tc.arguments)
-                            .await
-                            .unwrap_or_else(|e| format!("Tool execution error: {}", e))
-                    };
-
-                    let _ = tx.send(AgentEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: output.clone(),
-                    });
-
-                    // Handle todo updates
-                    if tc.name == "todo_write" {
-                        if let Ok(items) =
-                            serde_json::from_value::<Vec<TodoItem>>(tc.arguments["todos"].clone())
-                        {
-                            self.todos = items.clone();
-                            let _ = tx.send(AgentEvent::TodoUpdate(items));
-                        }
-                    }
-
-                    self.messages.push(ChatMessage {
-                        role: "tool".to_string(),
-                        content: format!("Tool {} result:\n{}", tc.name, output),
-                        name: Some(tc.name.clone()),
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_calls: None,
-                    });
+                    self.messages.push(ChatMessage::assistant(&final_text));
+                    let _ = tx.send(AgentEvent::FinalResponse(final_text));
                 }
-                continue; // next round
-            }
-
-            // Final response (no tool calls)
-            let final_text = if result.content.is_empty() {
-                "(no response)".to_string()
-            } else {
-                result.content.clone()
-            };
-
-            self.messages.push(ChatMessage::assistant(&final_text));
-            let _ = tx.send(AgentEvent::FinalResponse(final_text));
-            return Ok(());
-        }
-
-        // Force one final LLM call WITHOUT tools to guarantee a text summary
-        self.messages.push(ChatMessage::system(
-            "You have exhausted all available tool rounds. \
-             You MUST now provide a final text response summarizing \
-             what you accomplished and any remaining work. \
-             Do NOT attempt any tool calls."
-        ));
-
-        let final_options = ChatOptions {
-            messages: self.messages.clone(),
-            tools: None, // No tools — forces text-only response
-            temperature: Some(0.4),
-            max_tokens: Some(16384),
-        };
-
-        let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel();
-        let tx_clone = tx.clone();
-        let forwarder = tokio::spawn(async move {
-            while let Some(llm_event) = llm_rx.recv().await {
-                match llm_event {
-                    fusion_llm::client::LlmEvent::Thinking(chunk) => {
-                        let _ = tx_clone.send(AgentEvent::Thinking(chunk));
-                    }
-                    fusion_llm::client::LlmEvent::TextDelta(chunk) => {
-                        let _ = tx_clone.send(AgentEvent::TextDelta(chunk));
-                    }
+                Err(_) => {
+                    let _ = forwarder.await;
+                    let msg = "Agent completed all available rounds.".to_string();
+                    let _ = tx.send(AgentEvent::FinalResponse(msg));
                 }
             }
-        });
-
-        match self.llm.chat(final_options, Some(llm_tx)).await {
-            Ok(result) => {
-                let _ = forwarder.await;
-                let final_text = if result.content.is_empty() {
-                    "Agent completed all rounds. No further summary available.".to_string()
-                } else {
-                    result.content
-                };
-                self.messages.push(ChatMessage::assistant(&final_text));
-                let _ = tx.send(AgentEvent::FinalResponse(final_text));
-            }
-            Err(_) => {
-                let _ = forwarder.await;
-                let msg = "Agent completed all available rounds.".to_string();
-                let _ = tx.send(AgentEvent::FinalResponse(msg));
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     pub fn get_todos(&self) -> &[TodoItem] {
@@ -501,7 +528,33 @@ impl Agent {
     }
 
     pub fn update_model(&mut self, model: &str) {
+        let previous_model = self.config.model.clone();
+        self.config.model = model.to_string();
         self.llm.update_model(model);
+
+        if let Some(system_message) = self.messages.first_mut().filter(|m| m.role == "system") {
+            let previous = format!(
+                "You are currently running with the LLM model: {}.",
+                previous_model
+            );
+            let current = format!("You are currently running with the LLM model: {}.", model);
+            if system_message.content.contains(&previous) {
+                system_message.content = system_message.content.replacen(&previous, &current, 1);
+            } else {
+                system_message.content.push_str(&format!(
+                    "\n\nRUNTIME MODEL UPDATE:\nThe active LLM model is now {}.\n",
+                    model
+                ));
+            }
+        }
+    }
+
+    pub fn model(&self) -> &str {
+        &self.config.model
+    }
+
+    pub fn set_max_tokens(&mut self, max_tokens: Option<u32>) {
+        self.max_tokens = max_tokens;
     }
 
     async fn execute_delegate_write(
@@ -521,53 +574,16 @@ impl Agent {
         let acceptance_criteria = arguments["acceptance_criteria"].as_str().unwrap_or("");
 
         let main_cwd = self.cwd.clone();
-        let use_worktree = std::path::Path::new(&main_cwd).join(".git").exists();
-
-        let (worktree_path, sub_cwd) = if use_worktree {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            let wt_dir = home.join(".fusion").join("worktrees").join(format!("wt_{}", timestamp));
-            let wt_path_str = wt_dir.to_string_lossy().to_string();
-
-            let _ = tx.send(AgentEvent::TextDelta(format!(
-                "\n[Arbitrage] Creating isolated git worktree at {}...\n",
-                wt_path_str
-            )));
-
-            let wt_add = std::process::Command::new("git")
-                .args(["worktree", "add", "-d", &wt_path_str])
-                .current_dir(&main_cwd)
-                .output();
-
-            match wt_add {
-                Ok(out) if out.status.success() => {
-                    (Some(wt_dir), wt_path_str)
-                }
-                _ => {
-                    let _ = tx.send(AgentEvent::TextDelta(
-                        "\n[Arbitrage] Warning: Failed to create git worktree. Falling back to main workspace.\n".to_string()
-                    ));
-                    (None, main_cwd.clone())
-                }
-            }
-        } else {
-            (None, main_cwd.clone())
-        };
 
         let _ = tx.send(AgentEvent::TextDelta(format!(
-            "\n[Arbitrage] Spawning fast coder sub-agent (Workspace: {}) (Files: {:?})...\n",
-            if worktree_path.is_some() { "Isolated Worktree" } else { "Main Workspace" },
+            "\n[Arbitrage] Spawning fast coder sub-agent (Workspace: Direct Write) (Files: {:?})...\n",
             files
         )));
 
-        // 1. Get the small model client
+        // 1. Get the small model client config
         let small_model_id = self.get_small_model_id();
         let mut small_config = self.config.clone();
         small_config.model = small_model_id.clone();
-        let small_llm = create_llm_client(&small_config);
 
         // 2. Build the system prompt for the cheap model
         let files_list = files.join(", ");
@@ -581,176 +597,165 @@ impl Agent {
              {}\n\n\
              INSTRUCTIONS:\n\
              1. Read the target files to understand current code.\n\
-             2. Apply the necessary changes using search_replace or write_file.\n\
-             3. Run the acceptance criteria command (run_command) to verify the build/tests.\n\
-             4. If there are errors, correct them and re-run. Do NOT loop forever.\n\
-             5. Once verified (or if you are stuck after 2 attempts), provide a summary and finish.",
+             2. Prefer apply_patch for compact existing-file edits and multi-file changes.\n\
+             3. Use search_replace for a single exact replacement. Use write_file only for new files or intentional full rewrites.\n\
+             4. Every write_file call MUST include both path and complete content. Never call a write tool with an empty object.\n\
+             5. Do not run the full acceptance command; the parent runs it once after your edits.\n\
+             6. You may run a small targeted check only when it directly helps complete an edit.\n\
+             7. Once the edits are complete, provide a concise summary and finish.\n\n\
+             TONE AND STYLE:\n\
+             - Be concise, direct, and to the point.\n\
+             - Do not add unnecessary preamble or postamble (such as explaining your code or summarizing your action).\n\
+             - Minimize output tokens as much as possible.\n\n\
+             FOLLOWING CONVENTIONS:\n\
+             - Mimic local code style and conventions.\n\
+             - Make MINIMAL changes to achieve the goal.\n\
+             - DO NOT ADD ANY COMMENTS unless asked.",
             task_description, files_list, acceptance_criteria
         );
 
-        // 3. Initialize message history for the sub-agent
-        let mut sub_messages = vec![
-            ChatMessage::system(sys_prompt),
-            ChatMessage::user("Please implement the requested changes now."),
-        ];
+        // 3. Instantiate the sub-agent reusing the main Agent engine directly in main workspace
+        let keenable_api_key = self
+            .config
+            .settings
+            .get("keenable")
+            .and_then(|v| v.get("api_key"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("KEENABLE_API_KEY").ok());
 
-        // 4. Run the sub-agent loop (up to 4 rounds)
-        let sub_tool_schemas = build_tool_schemas();
-        let max_rounds = 4;
-        let mut sub_summary = String::new();
-
-        // Create a tool registry pointing to the sub_cwd (worktree or main)
-        let sub_tool_registry = ToolRegistry::new(&sub_cwd, None);
-
-        for _round in 0..max_rounds {
-            let options = ChatOptions {
-                messages: sub_messages.clone(),
-                tools: Some(sub_tool_schemas.clone()),
-                temperature: Some(0.2),
-                max_tokens: None,
-            };
-
-            // Call the cheap LLM (non-streaming)
-            let result = match small_llm.chat(options, None).await {
-                Ok(res) => res,
-                Err(e) => {
-                    if worktree_path.is_some() {
-                        let _ = std::process::Command::new("git")
-                            .args(["worktree", "remove", "--force", &sub_cwd])
-                            .current_dir(&main_cwd)
-                            .output();
-                    }
-                    return format!("Arbitrage sub-agent LLM error: {}", e);
-                }
-            };
-
-            if !result.content.is_empty() {
-                sub_summary = result.content.clone();
-            }
-
-            if result.tool_calls.is_empty() {
-                break;
-            }
-
-            sub_messages.push(ChatMessage::assistant_with_tools(
-                result.content.clone(),
-                result.tool_calls.clone(),
-            ));
-
-            for tc in &result.tool_calls {
-                let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
-                let preview = if args_str.chars().count() > 100 {
-                    let truncated: String = args_str.chars().take(100).collect();
-                    format!("{}...", truncated)
-                } else {
-                    args_str.clone()
-                };
-
-                let _ = tx.send(AgentEvent::TextDelta(format!(
-                    "  [Arbitrage Coder] calling {} with {}\n",
-                    tc.name, preview
-                )));
-
-                let output = sub_tool_registry
-                    .execute(&tc.name, &tc.arguments)
-                    .await
-                    .unwrap_or_else(|e| format!("Tool execution error: {}", e));
-
-                sub_messages.push(ChatMessage {
-                    role: "tool".to_string(),
-                    content: format!("Tool {} result:\n{}", tc.name, output),
-                    name: Some(tc.name.clone()),
-                    tool_call_id: Some(tc.id.clone()),
-                    tool_calls: None,
-                });
-            }
-        }
-
-        // 5. Gather git diff in sub workspace
-        let diff_args = serde_json::json!({
-            "command": "git diff",
-            "timeout_secs": 10
-        });
-        let git_diff = sub_tool_registry
-            .execute("run_command", &diff_args)
-            .await
-            .unwrap_or_else(|_| "Failed to get git diff".to_string());
-
-        // 6. Run verification command inside sub workspace
-        let verify_args = serde_json::json!({
-            "command": acceptance_criteria,
-            "timeout_secs": 60
-        });
-        let verification = if !acceptance_criteria.trim().is_empty() {
-            sub_tool_registry
-                .execute("run_command", &verify_args)
-                .await
-                .unwrap_or_else(|_| "Failed to run acceptance command".to_string())
-        } else {
-            "No acceptance command provided".to_string()
+        let sub_tool_registry =
+            ToolRegistry::new(&main_cwd, Some(main_cwd.clone()), keenable_api_key);
+        let mut sub_agent = Agent {
+            config: small_config.clone(),
+            llm: create_llm_client(&small_config),
+            messages: vec![ChatMessage::system(sys_prompt)],
+            todos: Vec::new(),
+            cwd: main_cwd.clone(),
+            tool_registry: sub_tool_registry,
+            arbitrage_mode: false, // Enable direct editing tools for the focused worker.
+            max_rounds: setting_u64(&self.config, "subagent_max_rounds", 12).max(1) as usize,
+            max_tokens: Some(
+                setting_u64(&self.config, "subagent_max_tokens", 16384).clamp(1024, u32::MAX as u64)
+                    as u32,
+            ),
         };
 
-        // Determine if build/test passed
-        let is_verified = !verification.to_lowercase().contains("error") 
-            && !verification.to_lowercase().contains("failed")
-            && !verification.to_lowercase().contains("cannot find")
-            && !verification.to_lowercase().contains("cannot compile");
+        // 4. Create custom channel to intercept and pretty-print sub-agent progress to main TUI
+        let (sub_tx, mut sub_rx) = tokio::sync::mpsc::unbounded_channel();
+        let tx_clone = tx.clone();
 
-        // 7. If we used worktree and it compiled/passed successfully, copy files back
-        if let Some(ref wt) = worktree_path {
-            if is_verified {
-                let _ = tx.send(AgentEvent::TextDelta(
-                    "\n[Arbitrage] Success! Verification passed. Copying files back to main workspace...\n".to_string()
-                ));
-                // Find modified files via git status --porcelain
-                let mut modified_files = Vec::new();
-                let status_args = serde_json::json!({
-                    "command": "git status --porcelain",
-                    "timeout_secs": 5
-                });
-                if let Ok(status_out) = sub_tool_registry.execute("run_command", &status_args).await {
-                    for line in status_out.lines() {
-                        let trimmed = line.trim();
-                        // M = Modified, A = Added, ?? = Untracked
-                        if trimmed.starts_with("M ") || trimmed.starts_with("A ") || trimmed.starts_with("?? ") {
-                            let file_path = trimmed[2..].trim();
-                            modified_files.push(file_path.to_string());
-                        }
+        let event_forwarder = tokio::spawn(async move {
+            while let Some(event) = sub_rx.recv().await {
+                match event {
+                    AgentEvent::TextDelta(delta) => {
+                        let _ = tx_clone.send(AgentEvent::TextDelta(delta));
                     }
-                }
-
-                for file in &modified_files {
-                    let src = wt.join(file);
-                    let dest = std::path::Path::new(&main_cwd).join(file);
-                    if src.exists() {
-                        if let Some(parent) = dest.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let _ = std::fs::copy(&src, &dest);
+                    AgentEvent::Thinking(thinking) => {
+                        let _ = tx_clone.send(AgentEvent::Thinking(thinking));
                     }
+                    AgentEvent::ToolCall { name, args_preview } => {
+                        let _ = tx_clone.send(AgentEvent::ToolCall {
+                            name: format!("subagent:{}", name),
+                            args_preview,
+                        });
+                    }
+                    AgentEvent::ToolOutputDelta { name, output } => {
+                        let _ = tx_clone.send(AgentEvent::ToolOutputDelta {
+                            name: format!("subagent:{}", name),
+                            output,
+                        });
+                    }
+                    AgentEvent::ToolResult { name, output } => {
+                        let _ = tx_clone.send(AgentEvent::ToolResult {
+                            name: format!("subagent:{}", name),
+                            output,
+                        });
+                    }
+                    _ => {}
                 }
-            } else {
-                let _ = tx.send(AgentEvent::TextDelta(
-                    "\n[Arbitrage] Verification failed inside worktree. Main workspace remains untouched.\n".to_string()
-                ));
             }
+        });
 
-            // Remove the worktree
-            let _ = std::process::Command::new("git")
-                .args(["worktree", "remove", "--force", &sub_cwd])
-                .current_dir(&main_cwd)
-                .output();
-        }
+        // 5. Bound the worker run so a stalled provider or tool cannot block the parent forever.
+        let timeout_secs = setting_u64(&self.config, "subagent_timeout_secs", 900).max(1);
+        let sub_result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            sub_agent.process("Please implement the requested changes now.", sub_tx),
+        )
+        .await;
+
+        // The process future owns the final sender. Once it completes or is cancelled,
+        // the forwarder drains all remaining streamed events and exits.
+        let _ = event_forwarder.await;
+
+        let (status, sub_summary) = match sub_result {
+            Ok(Ok(())) => (
+                "completed",
+                sub_agent
+                    .messages
+                    .last()
+                    .map(|m| m.content.clone())
+                    .unwrap_or_else(|| "Sub-agent finished without a summary.".to_string()),
+            ),
+            Ok(Err(e)) => ("failed", format!("Sub-agent execution error: {}", e)),
+            Err(_) => (
+                "timed_out",
+                format!(
+                    "Sub-agent exceeded its {} second deadline; partial edits were preserved.",
+                    timeout_secs
+                ),
+            ),
+        };
+
+        // Return compact workspace metadata instead of injecting a potentially huge full diff
+        // into the parent model's next request.
+        let changes_args = serde_json::json!({
+            "command": "git status --short && git diff --stat",
+            "timeout_secs": 10
+        });
+        let changes = execute_tool_streaming(
+            &sub_agent.tool_registry,
+            "run_command",
+            &changes_args,
+            "subagent:changes",
+            &tx,
+        )
+        .await
+        .unwrap_or_else(|e| format!("Failed to inspect workspace changes: {}", e));
+
+        // The parent owns verification, so the expensive command runs at most once.
+        let verify_timeout = setting_u64(&self.config, "subagent_verify_timeout_secs", 120).max(1);
+        let verification = if status == "completed" && !acceptance_criteria.trim().is_empty() {
+            let verify_args = serde_json::json!({
+                "command": acceptance_criteria,
+                "timeout_secs": verify_timeout
+            });
+            execute_tool_streaming(
+                &sub_agent.tool_registry,
+                "run_command",
+                &verify_args,
+                "subagent:verification",
+                &tx,
+            )
+            .await
+            .unwrap_or_else(|e| format!("Verification failed: {}", e))
+        } else if acceptance_criteria.trim().is_empty() {
+            "Not requested".to_string()
+        } else {
+            "Skipped because the sub-agent did not complete successfully".to_string()
+        };
 
         format!(
-            "Arbitrage Sub-Agent Execution Results:\n\n\
-             Summary:\n{}\n\n\
-             Git Diff:\n```diff\n{}\n```\n\n\
-             Verification Result:\n{}\n",
-            sub_summary, git_diff, verification
+            "Sub-agent result\n\
+             status: {}\n\
+             model: {}\n\
+             summary:\n{}\n\n\
+             workspace changes:\n{}\n\n\
+             verification:\n{}",
+            status, small_model_id, sub_summary, changes, verification
         )
     }
-
 
     fn get_small_model_id(&self) -> String {
         if let Some(ref m) = self.config.small_model {
@@ -762,3 +767,74 @@ impl Agent {
     }
 }
 
+async fn execute_tool_streaming(
+    registry: &ToolRegistry,
+    name: &str,
+    args: &serde_json::Value,
+    event_name: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+) -> Result<String, String> {
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let event_tx = tx.clone();
+    let event_name = event_name.to_string();
+    let mut forwarder = tokio::spawn(async move {
+        while let Some(output) = output_rx.recv().await {
+            let _ = event_tx.send(AgentEvent::ToolOutputDelta {
+                name: event_name.clone(),
+                output,
+            });
+        }
+    });
+
+    let result = registry
+        .execute_streaming(name, args, Some(output_tx))
+        .await;
+    if tokio::time::timeout(std::time::Duration::from_secs(1), &mut forwarder)
+        .await
+        .is_err()
+    {
+        forwarder.abort();
+    }
+    result
+}
+
+fn setting_u64(config: &Config, key: &str, default: u64) -> u64 {
+    config
+        .settings
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fusion_core::config::Provider;
+
+    #[test]
+    fn update_model_updates_runtime_config_and_existing_prompt() {
+        let config = Config {
+            provider: Provider::Cloudflare,
+            model: "kimi".to_string(),
+            small_model: None,
+            api_key: String::new(),
+            base_url: String::new(),
+            cloudflare_account_id: None,
+            yolo: false,
+            config_path: None,
+            settings: Default::default(),
+        };
+        let mut agent = Agent::new(&config, ".".to_string());
+        agent.messages.push(ChatMessage::system(
+            "You are currently running with the LLM model: kimi.",
+        ));
+
+        agent.update_model("@cf/zai-org/glm-4.7-flash");
+
+        assert_eq!(agent.model(), "@cf/zai-org/glm-4.7-flash");
+        assert_eq!(agent.llm.model(), "@cf/zai-org/glm-4.7-flash");
+        assert!(agent.messages[0]
+            .content
+            .contains("LLM model: @cf/zai-org/glm-4.7-flash."));
+    }
+}

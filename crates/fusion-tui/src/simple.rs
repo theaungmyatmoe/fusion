@@ -45,6 +45,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
     let mut rl = rustyline::DefaultEditor::new()?;
     let mut yolo = config.yolo;
     let mut current_mode = mode.to_string();
+    let mut current_model = config.model.clone();
     let mut pending_image: Option<String> = None;
 
     loop {
@@ -105,7 +106,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                     println!("\x1b[38;2;124;58;237mPlan mode:\x1b[0m agent will explore but not edit until you approve.");
                 }
                 "/status" => {
-                    println!("model={}  mode={}", config.model, current_mode);
+                    println!("model={}  mode={}", current_model, current_mode);
                 }
                 "/image" => {
                     let cwd = std::env::current_dir().unwrap_or_default();
@@ -128,8 +129,13 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                     }
                 }
                 _ if lower.starts_with("/model ") => {
-                    let new_model = trimmed[7..].trim();
-                    println!("Model → {}", new_model);
+                    let requested = trimmed[7..].trim();
+                    let resolved = fusion_core::models::lookup_model(requested)
+                        .map(|info| info.full_id)
+                        .unwrap_or(requested);
+                    agent.update_model(resolved);
+                    current_model = resolved.to_string();
+                    println!("Model → {}", current_model);
                 }
                 _ => {
                     println!("\x1b[90mUnknown command. /help for list.\x1b[0m");
@@ -154,6 +160,7 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
             use std::io::Write;
             let mut is_first_thinking = true;
             let mut is_first_text = true;
+            let mut streamed_tool_output = false;
             let mut md_renderer = crate::ansi_markdown::AnsiMarkdownRenderer::new();
 
             while let Some(event) = agent_rx.recv().await {
@@ -193,19 +200,33 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             print!("{}", flushed);
                         }
                         is_first_text = true;
+                        streamed_tool_output = false;
                         println!("\n  \x1b[90m+-- [tool: {}]\x1b[0m", name);
                         let display_cmd = if name == "run_command" {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&args_preview) {
-                                v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args_preview[..args_preview.len().min(200)].to_string())
+                                v["command"].as_str().map(|s| s.to_string()).unwrap_or_else(|| args_preview.chars().take(200).collect())
                             } else {
-                                args_preview[..args_preview.len().min(200)].to_string()
+                                args_preview.chars().take(200).collect()
                             }
                         } else {
-                            args_preview[..args_preview.len().min(200)].to_string()
+                            args_preview.chars().take(200).collect()
                         };
                         println!("  \x1b[90m|\x1b[0m \x1b[38;2;106;191;106;1m$ {}\x1b[0m", display_cmd);
                     }
+                    AgentEvent::ToolOutputDelta { name: _, output } => {
+                        streamed_tool_output = true;
+                        print!("{}", output);
+                        let _ = std::io::stdout().flush();
+                    }
                     AgentEvent::ToolResult { name: _, output } => {
+                        if streamed_tool_output {
+                            if !output.ends_with('\n') {
+                                println!();
+                            }
+                            println!("  \x1b[90m+--\x1b[0m");
+                            streamed_tool_output = false;
+                            continue;
+                        }
                         let cleaned = output.replace("\r\n", "\n");
                         let truncated = if cleaned.len() > 1000 {
                             let truncated_str: String = cleaned.chars().take(1000).collect();
