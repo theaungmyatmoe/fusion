@@ -34,8 +34,6 @@ cd fusion
 cargo build --release
 ```
 
----
-
 ## Configuration
 
 Create `fusion.toml` in your project directory or at `~/.config/fusion/fusion.toml`:
@@ -77,8 +75,6 @@ llm_max_concurrent = 2         # shared parent+child HTTP slots (live-updatable)
 | `FUSION_MODEL` | Override model ID |
 | `FUSION_YOLO=1` | Enable auto-approve mode |
 
----
-
 ## Usage
 
 ```bash
@@ -114,8 +110,6 @@ fusion --upgrade          # Self-upgrade to the latest version
 | `Ctrl+E` | Open `$EDITOR` to compose input in a full-screen editor |
 | `Up` / `Down` | Cycle through input history |
 | `Backspace` | Atomically delete inline tag placeholders (e.g. `[Image #1]`) |
-
----
 
 ## License
 
