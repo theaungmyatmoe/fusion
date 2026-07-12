@@ -133,6 +133,12 @@ impl LlmClient {
         self.config.model = model.to_string();
     }
 
+    /// Hot-swap the entire config (API key, provider, account ID, etc.)
+    /// while reusing the existing HTTP connection pool.
+    pub fn update_config(&mut self, config: &Config) {
+        self.config = config.clone();
+    }
+
     /// Send a chat completion request. If event_tx is provided, it streams chunks in real-time.
     pub async fn chat(
         &self,

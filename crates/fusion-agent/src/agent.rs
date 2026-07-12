@@ -553,6 +553,14 @@ impl Agent {
         &self.config.model
     }
 
+    /// Hot-reload the entire config (API key, provider, account ID, etc.)
+    /// into this agent and its LLM client. Called after `/key` or `/providers`
+    /// saves a new key to disk so it takes effect immediately.
+    pub fn reload_config(&mut self, config: &Config) {
+        self.config = config.clone();
+        self.llm.update_config(config);
+    }
+
     pub fn set_max_tokens(&mut self, max_tokens: Option<u32>) {
         self.max_tokens = max_tokens;
     }

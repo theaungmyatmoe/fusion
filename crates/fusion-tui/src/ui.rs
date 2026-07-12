@@ -575,16 +575,58 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
                 }
                 "tool_result" => {
                     let prev_is_tool = msg_idx > 0 && app.messages[msg_idx - 1].role == "tool";
+                    let content = &msg.content;
                     
                     if prev_is_tool {
-                        for line in msg.content.lines() {
+                        // Smart formatting for tool output inside the bordered box
+                        let output_lines: Vec<&str> = content.lines().collect();
+                        let max_display_lines = 30;
+                        let truncated = output_lines.len() > max_display_lines;
+                        let display_lines = if truncated {
+                            &output_lines[..max_display_lines]
+                        } else {
+                            &output_lines[..]
+                        };
+                        
+                        for line in display_lines {
+                            let trimmed = line.trim();
+                            let (prefix_style, line_style) = if trimmed.starts_with("SUCCESS") || trimmed.starts_with("✓") {
+                                // Success lines in green
+                                (Style::default().fg(theme.border), Style::default().fg(Color::Green))
+                            } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+                                // Diff additions in green
+                                (Style::default().fg(theme.border), Style::default().fg(Color::Green))
+                            } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+                                // Diff deletions in red
+                                (Style::default().fg(theme.border), Style::default().fg(Color::Red))
+                            } else if trimmed.starts_with("@@") {
+                                // Diff hunk headers
+                                (Style::default().fg(theme.border), Style::default().fg(Color::Cyan))
+                            } else if trimmed.starts_with("ERROR") || trimmed.starts_with("Failed") {
+                                // Error lines
+                                (Style::default().fg(theme.border), Style::default().fg(Color::Red))
+                            } else {
+                                (Style::default().fg(theme.border), Style::default().fg(theme.code_block_fg))
+                            };
+                            
                             lines.push(Line::from(vec![
-                                Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
-                                Span::styled(line.to_string(), Style::default().fg(theme.code_block_fg)),
+                                Span::styled("  \u{2503}   ", prefix_style),
+                                Span::styled(line.to_string(), line_style),
                             ]));
                         }
+                        
+                        if truncated {
+                            lines.push(Line::from(vec![
+                                Span::styled("  \u{2503}   ", Style::default().fg(theme.border)),
+                                Span::styled(
+                                    format!("… {} more lines (truncated)", output_lines.len() - max_display_lines),
+                                    Style::default().fg(theme.dim),
+                                ),
+                            ]));
+                        }
+                        
                         lines.push(Line::from(Span::styled("  \u{2517}\u{2501}\u{2501}", Style::default().fg(theme.border))));
-                    } else if msg.content.contains("resumed session") {
+                    } else if content.contains("resumed session") {
                         lines.push(Line::from(vec![
                             Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
                             Span::styled(
@@ -594,14 +636,14 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
                                     .add_modifier(Modifier::BOLD),
                             ),
                         ]));
-                        for line in msg.content.lines() {
+                        for line in content.lines() {
                             lines.push(Line::from(vec![
                                 Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
                                 Span::styled(line.to_string(), Style::default().fg(theme.dim)),
                             ]));
                         }
                     } else {
-                        for line in msg.content.lines() {
+                        for line in content.lines() {
                             lines.push(Line::from(vec![
                                 Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
                                 Span::styled(line.to_string(), Style::default().fg(theme.dim)),

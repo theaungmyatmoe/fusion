@@ -52,7 +52,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/max", description: "Set output to maximum tokens", has_submenu: false },
     SlashCommand { name: "/high", description: "Set output to high tokens", has_submenu: false },
     SlashCommand { name: "/normal", description: "Set output to normal tokens", has_submenu: false },
-    SlashCommand { name: "/key", description: "Set provider API key (saved to config)", has_submenu: false },
+
     SlashCommand { name: "/providers", description: "Configure provider & API key", has_submenu: true },
     SlashCommand { name: "/status", description: "Show current settings", has_submenu: false },
     SlashCommand { name: "/session", description: "Show current session ID", has_submenu: false },
@@ -61,7 +61,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/compact", description: "Summarize and compact message history", has_submenu: false },
     SlashCommand { name: "/grill", description: "Toggle design interview mode", has_submenu: false },
 
-    SlashCommand { name: "/arbitrage", description: "Toggle model token arbitrage mode", has_submenu: false },
+
     SlashCommand { name: "/dq", description: "Clear or remove queued prompts", has_submenu: false },
     SlashCommand { name: "/theme", description: "Toggle light/dark theme", has_submenu: false },
     SlashCommand { name: "/taste", description: "Scan and learn coding style preferences", has_submenu: false },
@@ -684,23 +684,31 @@ impl App {
                 self.save_session();
                 self.should_quit = true;
                 return;
-            } else if key.code == KeyCode::Enter {
+            } else if key.code == KeyCode::Enter && !self.autocomplete_visible {
                 if self.in_paste_burst || is_paste_like {
                     self.input.push('\n');
                     self.update_autocomplete();
                     return;
                 }
-                let full_prompt = self.build_full_prompt();
-                if !full_prompt.is_empty() {
-                    self.queued_prompts.push(full_prompt);
-                    self.clear_input_state();
-                    self.messages.push(Message {
-                        role: "system".to_string(),
-                        content: format!("Prompt queued (#{}).", self.queued_prompts.len()),
-                    });
+                // Slash commands execute immediately even while thinking
+                let trimmed = self.input.trim().to_string();
+                if trimmed.starts_with('/') {
+                    // Fall through — normal Enter handling will call handle_submit → handle_slash
+                } else {
+                    // Queue regular prompts for later
+                    let full_prompt = self.build_full_prompt();
+                    if !full_prompt.is_empty() {
+                        self.queued_prompts.push(full_prompt);
+                        self.clear_input_state();
+                        self.messages.push(Message {
+                            role: "system".to_string(),
+                            content: format!("Prompt queued (#{}).", self.queued_prompts.len()),
+                        });
+                    }
+                    return;
                 }
-                return;
             }
+            // Allow typing, autocomplete navigation, and slash command entry while thinking
         }
 
         let mut grill_action: Option<(String, Option<String>)> = None;
@@ -1646,7 +1654,7 @@ impl App {
             "/help" | "/h" | "/?" => {
                 self.messages.push(Message {
                     role: "system".to_string(),
-                    content: "Fusion Code commands:\n  /help          show all commands\n  /yolo          toggle auto-approve\n  /plan          enter plan mode\n  /grill         toggle grill mode (design interview)\n  /model <n>     switch model (autocomplete supported)\n  /key <value>   save API key to config file\n  /max           set maximum token output\n  /high          set high token output\n  /normal        set normal token output\n  /status        current settings\n  /theme         toggle light/dark theme\n  /image         insert clipboard image\n  /session       show session ID\n  /sessions      list saved sessions\n  /clear         clear messages\n  /dq [n]        clear queue or dequeue item n\n  @filename      mention a file/image from cwd\n  /quit          quit (session auto-saved)\n  Ctrl+C twice   quit".to_string(),
+                    content: "Fusion Code commands:\n  /help          show all commands\n  /yolo          toggle auto-approve\n  /plan          enter plan mode\n  /grill         toggle grill mode (design interview)\n  /model <n>     switch model (autocomplete supported)\n  /providers     configure provider & API key\n  /max           set maximum token output\n  /high          set high token output\n  /normal        set normal token output\n  /status        current settings\n  /theme         toggle light/dark theme\n  /image         insert clipboard image\n  /session       show session ID\n  /sessions      list saved sessions\n  /clear         clear messages\n  /dq [n]        clear queue or dequeue item n\n  @filename      mention a file/image from cwd\n  /quit          quit (session auto-saved)\n  Ctrl+C twice   quit".to_string(),
                 });
             }
             "/yolo" => {
@@ -1945,10 +1953,21 @@ impl App {
                                 "****".to_string()
                             };
                             let prov_desc = provider_opt.unwrap_or_else(|| "detected provider".to_string());
+
+                            // Hot-reload: re-read config from disk and push into the live Agent
+                            let cwd = std::path::PathBuf::from(&self.session.cwd);
+                            if let Ok(new_config) = fusion_core::config::load_config(&cwd) {
+                                let agent = Arc::clone(&self.agent);
+                                tokio::spawn(async move {
+                                    let mut agent = agent.lock().await;
+                                    agent.reload_config(&new_config);
+                                });
+                            }
+
                             self.messages.push(Message {
                                 role: "system".to_string(),
                                 content: format!(
-                                    "API key for {} saved to ~/.config/fusion/fusion.toml\nKey: {}\nRestart fusion to apply the new key.",
+                                    "API key for {} saved to ~/.config/fusion/fusion.toml\nKey: {}\nApplied immediately — no restart needed.",
                                     prov_desc, masked
                                 ),
                             });
