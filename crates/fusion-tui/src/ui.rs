@@ -276,6 +276,34 @@ fn draw_gradient_spinner(app: &App, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Cheap fingerprint of message bodies for render-cache invalidation.
+fn message_content_fingerprint(messages: &[crate::app::Message]) -> u64 {
+    // FNV-1a 64-bit — fast and good enough for "did transcript content change?"
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for msg in messages {
+        for b in msg.role.as_bytes() {
+            hash ^= u64::from(*b);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+        // Length + a sample of content so appends always change the fingerprint
+        // without hashing multi-megabyte thinking dumps on every frame.
+        let len = msg.content.len() as u64;
+        hash ^= len;
+        hash = hash.wrapping_mul(0x100000001b3);
+        if let Some(last) = msg.content.as_bytes().last() {
+            hash ^= u64::from(*last);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        if let Some(first) = msg.content.as_bytes().first() {
+            hash ^= u64::from(*first);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
+}
+
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, theme: Theme) {
     if app.messages.is_empty() && app.input.is_empty() {
         let card_width = 62;
@@ -372,16 +400,24 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
     let wrap_width = (area.width as usize).saturating_sub(2);
     let width = wrap_width;
 
-    // Check if we can reuse the cached lines (only when the agent is NOT thinking/animating)
+    // Fingerprint message bodies so pure keystrokes (input-only changes) hit the
+    // cache even while `is_thinking` is true. Previously the cache was disabled
+    // for the whole thinking phase, which made typing lag on every frame.
+    let content_fp = message_content_fingerprint(&app.messages);
+    let queue_len = app.queued_prompts.len();
+
     let mut cache = app.message_cache.borrow_mut();
-    let use_cache = if let Some((cached_width, cached_len, _)) = &*cache {
-        *cached_width == wrap_width && *cached_len == app.messages.len() && !app.is_thinking
+    let use_cache = if let Some((cached_width, cached_len, cached_fp, cached_queue, _)) = &*cache {
+        *cached_width == wrap_width
+            && *cached_len == app.messages.len()
+            && *cached_fp == content_fp
+            && *cached_queue == queue_len
     } else {
         false
     };
 
-    let wrapped_lines = if use_cache {
-        let (_, _, cached_lines) = cache.as_ref().unwrap();
+    let mut wrapped_lines = if use_cache {
+        let (_, _, _, _, cached_lines) = cache.as_ref().unwrap();
         cached_lines.clone()
     } else {
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -869,6 +905,17 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
                         Style::default().fg(Color::Red),
                     )));
                 }
+                "retry_status" => {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2503}  ", Style::default().fg(theme.border)),
+                        Span::styled(
+                            msg.content.clone(),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
                 "system" => {
                     if msg.content.starts_with("Todos:") {
                         lines.push(Line::from(vec![
@@ -935,12 +982,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
             }
         }
 
-        if app.is_thinking {
-            lines.push(Line::from(""));
-            lines.push(draw_gradient_spinner(app, &theme));
-        }
-
-        // Draw queued prompts if any
+        // Draw queued prompts if any (part of cache key via queue_len)
         if !app.queued_prompts.is_empty() {
             lines.push(Line::from(""));
             for (idx, prompt) in app.queued_prompts.iter().enumerate() {
@@ -952,10 +994,24 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect, _full_width: u16, the
             }
         }
 
+        // Cache WITHOUT the spinner so pure keystrokes reuse this work while the
+        // spinner still animates via tick-driven redraws below.
         let wrapped = wrap_lines(lines, wrap_width);
-        *cache = Some((wrap_width, app.messages.len(), wrapped.clone()));
+        *cache = Some((
+            wrap_width,
+            app.messages.len(),
+            content_fp,
+            queue_len,
+            wrapped.clone(),
+        ));
         wrapped
     };
+
+    // Spinner is outside the cache so animation does not force a full rebuild.
+    if app.is_thinking {
+        wrapped_lines.push(Line::from(""));
+        wrapped_lines.push(draw_gradient_spinner(app, &theme));
+    }
 
     // Auto-scroll logic with internal mutability (via Cell)
     let visible_height = area.height as usize;

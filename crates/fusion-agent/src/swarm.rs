@@ -9,17 +9,19 @@
 //! - Staggered starts avoid a thundering-herd of simultaneous first LLM calls
 //! - LLM client holds a process-wide request gate + Retry-After backoff
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use fusion_core::config::Config;
 use fusion_core::task_session::{TaskSession, TaskStatus};
-use fusion_llm::client::{create_llm_client, ChatMessage, ChatOptions, LlmClient};
+use fusion_llm::client::{
+    adaptive_spawn_stagger, create_subagent_llm_client, ChatMessage, ChatOptions, LlmClient,
+};
 
 use crate::agent::AgentEvent;
 use crate::persona::{get_persona, Persona};
@@ -30,6 +32,13 @@ use crate::tools::{build_tool_schemas_for_persona, ToolRegistry};
 const DEFAULT_SWARM_MAX_CONCURRENCY: usize = 2;
 /// Delay between launching each parallel/background sub-agent.
 const DEFAULT_SPAWN_STAGGER_MS: u64 = 750;
+
+struct QueuedJob {
+    index: usize,
+    persona_name: String,
+    persona: Persona,
+    task_desc: String,
+}
 
 /// Result of a completed (or failed/timed-out) sub-agent task.
 #[derive(Debug, Clone)]
@@ -138,7 +147,10 @@ impl TaskSwarm {
         format_task_result(&result)
     }
 
-    /// Parallel mode: spawn N sub-agents concurrently with semaphore gating.
+    /// Parallel mode: true worker-pool queue.
+    ///
+    /// Jobs sit in a queue and only start when a concurrency slot frees —
+    /// no fire-all-at-once thundering herd. Adaptive stagger grows under 429 pressure.
     async fn execute_parallel(
         &self,
         args: &serde_json::Value,
@@ -158,16 +170,7 @@ impl TaskSwarm {
             );
         }
 
-        let _ = tx.send(AgentEvent::TextDelta(format!(
-            "\n[Swarm] Spawning {} parallel sub-agents (concurrency: {}, stagger: {}ms)...\n",
-            tasks.len(),
-            self.max_concurrency,
-            self.spawn_stagger.as_millis()
-        )));
-
-        let mut handles = Vec::new();
-        let mut launched = 0usize;
-
+        let mut queue: VecDeque<QueuedJob> = VecDeque::new();
         for (i, task_spec) in tasks.iter().enumerate() {
             let persona_name = task_spec
                 .get("persona")
@@ -178,68 +181,107 @@ impl TaskSwarm {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let persona = match get_persona(persona_name) {
-                Some(p) => p.clone(),
+            match get_persona(persona_name) {
+                Some(p) => queue.push_back(QueuedJob {
+                    index: i,
+                    persona_name: persona_name.to_string(),
+                    persona: p.clone(),
+                    task_desc: task_desc.to_string(),
+                }),
                 None => {
                     let _ = tx.send(AgentEvent::TextDelta(format!(
                         "\n[Swarm] Task {} skipped: unknown persona '{}'\n",
                         i + 1,
                         persona_name
                     )));
-                    continue;
                 }
-            };
-
-            // Stagger launches so first LLM calls are not simultaneous.
-            if launched > 0 && !self.spawn_stagger.is_zero() {
-                tokio::time::sleep(self.spawn_stagger).await;
-            }
-            launched += 1;
-
-            let config = config.clone();
-            let cwd = cwd.to_string();
-            let tx = tx.clone();
-            let task_desc = task_desc.to_string();
-            let semaphore = self.semaphore.clone();
-            // Per-agent offset keeps later rounds from re-syncing on the API.
-            let start_offset = self.spawn_stagger.mul_f32(0.25) * (launched as u32).saturating_sub(1);
-
-            let handle = tokio::spawn(async move {
-                if !start_offset.is_zero() {
-                    tokio::time::sleep(start_offset).await;
-                }
-                let _permit = semaphore.acquire().await.unwrap();
-                run_sub_agent_standalone(&persona, &task_desc, None, &config, &cwd, tx).await
-            });
-            handles.push((i, persona_name.to_string(), handle));
-        }
-
-        // Collect results
-        let mut results = Vec::new();
-        for (idx, persona_name, handle) in handles {
-            match handle.await {
-                Ok(result) => results.push(result),
-                Err(e) => results.push(TaskResult {
-                    task_id: format!("parallel-{}", idx),
-                    persona: persona_name,
-                    status: TaskStatus::Failed(format!("Join error: {}", e)),
-                    summary: String::new(),
-                    workspace_changes: String::new(),
-                }),
             }
         }
 
-        // Format combined output
-        let completed = results
+        let total = queue.len();
+        let _ = tx.send(AgentEvent::TextDelta(format!(
+            "\n[Swarm] Queued {} parallel sub-agents (pool size: {}, base stagger: {}ms)...\n",
+            total,
+            self.max_concurrency,
+            self.spawn_stagger.as_millis()
+        )));
+
+        let mut join_set: JoinSet<(usize, String, TaskResult)> = JoinSet::new();
+        let mut results: Vec<Option<TaskResult>> = (0..tasks.len()).map(|_| None).collect();
+        let mut started = 0usize;
+
+        while !queue.is_empty() || !join_set.is_empty() {
+            // Fill free pool slots from the queue (true worker pool).
+            while !queue.is_empty() && join_set.len() < self.max_concurrency {
+                let permit = match self.try_or_wait_permit(join_set.is_empty()).await {
+                    Some(p) => p,
+                    None => break, // at capacity; wait for a running job
+                };
+
+                // Adaptive stagger: grows when the LLM gate is under rate-limit pressure.
+                if started > 0 {
+                    let stagger = adaptive_spawn_stagger(self.spawn_stagger);
+                    if !stagger.is_zero() {
+                        tokio::time::sleep(stagger).await;
+                    }
+                }
+
+                let job = queue.pop_front().unwrap();
+                started += 1;
+                let _ = tx.send(AgentEvent::TextDelta(format!(
+                    "\n[Swarm] Starting queued task {}/{} ({}): {}...\n",
+                    started,
+                    total,
+                    job.persona_name,
+                    truncate_desc(&job.task_desc, 80)
+                )));
+
+                let config = config.clone();
+                let cwd = cwd.to_string();
+                let tx_job = tx.clone();
+                join_set.spawn(async move {
+                    let _permit = permit;
+                    let result = run_sub_agent_standalone(
+                        &job.persona,
+                        &job.task_desc,
+                        None,
+                        &config,
+                        &cwd,
+                        tx_job,
+                    )
+                    .await;
+                    (job.index, job.persona_name, result)
+                });
+            }
+
+            // Wait for at least one job to finish before scheduling more.
+            match join_set.join_next().await {
+                Some(Ok((idx, _persona, result))) => {
+                    if idx < results.len() {
+                        results[idx] = Some(result);
+                    }
+                }
+                Some(Err(e)) => {
+                    let _ = tx.send(AgentEvent::TextDelta(format!(
+                        "\n[Swarm] Sub-agent join error: {}\n",
+                        e
+                    )));
+                }
+                None => break,
+            }
+        }
+
+        let ordered: Vec<TaskResult> = results.into_iter().flatten().collect();
+        let completed = ordered
             .iter()
             .filter(|r| r.status == TaskStatus::Completed)
             .count();
         let mut output = format!(
             "Parallel execution complete: {}/{} succeeded.\n\n",
             completed,
-            results.len()
+            ordered.len()
         );
-        for (i, r) in results.iter().enumerate() {
+        for (i, r) in ordered.iter().enumerate() {
             output.push_str(&format!(
                 "--- Task {} ({}) [{}] ---\ntask_id: {}\n{}\n\n",
                 i + 1,
@@ -250,6 +292,15 @@ impl TaskSwarm {
             ));
         }
         output
+    }
+
+    /// Acquire a swarm permit. If jobs are already running, use try_acquire so
+    /// we can wait for a completion instead of blocking the scheduler loop.
+    async fn try_or_wait_permit(&self, must_wait: bool) -> Option<OwnedSemaphorePermit> {
+        if must_wait {
+            return self.semaphore.clone().acquire_owned().await.ok();
+        }
+        self.semaphore.clone().try_acquire_owned().ok()
     }
 
     /// Background mode: spawn a sub-agent and return immediately with task_id.
@@ -551,8 +602,9 @@ pub async fn run_sub_agent_standalone(
     // 4. Build tool schemas for this persona
     let tool_schemas = build_tool_schemas_for_persona(persona.allowed_tools);
 
-    // 5. Create LLM client and tool registry
-    let llm = create_llm_client(&sub_config);
+    // 5. Create LLM client (sub-agent priority leaves a slot for the parent)
+    //    and tool registry.
+    let llm = create_subagent_llm_client(&sub_config);
     let keenable_api_key = config
         .settings
         .get("keenable")
@@ -586,19 +638,19 @@ pub async fn run_sub_agent_standalone(
         .unwrap_or(900)
         .max(1);
 
-    // Sub-agents inherit parent pacing when set; otherwise use a small default
-    // so concurrent children do not hammer the API between tool rounds.
+    // Provider-aware pacing; settings override. Pressure multiplies later.
+    let defaults = fusion_llm::client::provider_rate_defaults(&config.provider);
     let pacing_ms = config
         .settings
-        .get("agent_pacing_ms")
+        .get("subagent_pacing_ms")
         .and_then(serde_json::Value::as_u64)
         .or_else(|| {
             config
                 .settings
-                .get("subagent_pacing_ms")
+                .get("agent_pacing_ms")
                 .and_then(serde_json::Value::as_u64)
         })
-        .unwrap_or(200);
+        .unwrap_or(defaults.subagent_pacing_ms);
 
     let sub_result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
@@ -682,9 +734,15 @@ async fn run_agent_loop(
     tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<String, String> {
     for round in 0..max_rounds {
-        // Pace between rounds so concurrent sub-agents do not burst the API.
+        // Pace between rounds; stretch under rate-limit pressure.
         if round > 0 && pacing_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(pacing_ms)).await;
+            let pressure = fusion_llm::client::llm_rate_limit_pressure();
+            let effective = match pressure {
+                0 => pacing_ms,
+                1 => pacing_ms.saturating_mul(2),
+                _ => pacing_ms.saturating_mul(4),
+            };
+            tokio::time::sleep(Duration::from_millis(effective)).await;
         }
 
         // Nudge near end
@@ -725,6 +783,20 @@ async fn run_agent_loop(
                         let _ = tx_fwd.send(AgentEvent::TaskProgress {
                             task_id: tid.clone(),
                             event: Box::new(AgentEvent::TextDelta(chunk)),
+                        });
+                    }
+                    fusion_llm::client::LlmEvent::Retrying {
+                        attempt,
+                        max_attempts,
+                        delay_ms,
+                        reason,
+                    } => {
+                        // Surface at top level so the UI always sees retries.
+                        let _ = tx_fwd.send(AgentEvent::Retrying {
+                            attempt,
+                            max_attempts,
+                            delay_ms,
+                            reason: format!("sub-agent {}: {}", &tid[..8.min(tid.len())], reason),
                         });
                     }
                 }
@@ -854,6 +926,14 @@ fn format_task_result(result: &TaskResult) -> String {
          workspace changes:\n{}",
         result.task_id, result.persona, result.status, result.summary, result.workspace_changes
     )
+}
+
+fn truncate_desc(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max_chars).collect::<String>())
+    }
 }
 
 #[cfg(test)]

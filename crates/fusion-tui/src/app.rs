@@ -10,7 +10,7 @@ use fusion_core::config::Config;
 use fusion_core::models::{TokenLevel, list_models, lookup_model, CLOUDFLARE_MODELS};
 use fusion_core::session::{Session, list_sessions};
 
-use crate::event::{AppEvent, EventHandler};
+use crate::event::{coalesce_events, AppEvent, EventHandler};
 use crate::ui;
 
 /// Visible message in the TUI transcript.
@@ -144,8 +144,10 @@ pub struct App {
     pub pasted_blocks: Vec<String>,
     pub editor_requested: Option<String>,
 
-    // Cache for TUI message lines to prevent typing delays: (wrap_width, messages_len, lines)
-    pub message_cache: RefCell<Option<(usize, usize, Vec<Line<'static>>)>>,
+    /// Cache for rendered message lines so typing stays snappy during agent streams.
+    /// Tuple: `(wrap_width, msg_count, content_fp, queue_len, lines_without_spinner)`.
+    /// Spinner is appended after the cache so it can animate without a full rebuild.
+    pub message_cache: RefCell<Option<(usize, usize, u64, usize, Vec<Line<'static>>)>>,
 
     // Queued user prompts to execute sequentially
     pub queued_prompts: Vec<String>,
@@ -1627,6 +1629,37 @@ impl App {
                     content: format!("Todos:\n{}", list),
                 });
             }
+            AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                delay_ms,
+                reason,
+            } => {
+                let secs = delay_ms as f64 / 1000.0;
+                let pressure = fusion_llm::client::llm_rate_limit_pressure();
+                let content = if pressure > 0 {
+                    format!(
+                        "⏳ Rate limit — retry {}/{} in {:.1}s ({}); concurrency reduced (pressure {})",
+                        attempt, max_attempts, secs, reason, pressure
+                    )
+                } else {
+                    format!(
+                        "⏳ Retrying {}/{} in {:.1}s ({})",
+                        attempt, max_attempts, secs, reason
+                    )
+                };
+                // Replace last retry status line so we don't spam the transcript.
+                if let Some(last) = self.messages.last_mut() {
+                    if last.role == "retry_status" {
+                        last.content = content;
+                        return;
+                    }
+                }
+                self.messages.push(Message {
+                    role: "retry_status".to_string(),
+                    content,
+                });
+            }
             AgentEvent::TaskSpawned { task_id, persona, description } => {
                 let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
                 self.messages.push(Message {
@@ -2236,15 +2269,53 @@ pub async fn run_tui_with_session(
         None => App::new(config, event_tx),
     };
 
-    loop {
-        terminal.draw(|frame| ui::draw(frame, &app))?;
+    // Stream redraw throttle: agent tokens can arrive far faster than a terminal
+    // can paint. Cap stream-only frames so typing stays responsive on Termux and
+    // desktop. User input always forces an immediate redraw.
+    const STREAM_DRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+    let mut last_draw = Instant::now();
+    let mut needs_draw = true;
 
-        if let Some(event) = event_handler.next().await {
+    loop {
+        if needs_draw {
+            terminal.draw(|frame| ui::draw(frame, &app))?;
+            last_draw = Instant::now();
+            needs_draw = false;
+        }
+
+        // Prefer user input (separate channel); never block keys behind thinking tokens.
+        let Some(first) = event_handler.next().await else {
+            break;
+        };
+
+        // Drain everything already queued so one frame can apply many tokens.
+        let mut batch = vec![first];
+        batch.extend(event_handler.drain());
+        let mut batch = coalesce_events(batch);
+
+        // Process user input first within the batch for snappy typing feedback.
+        batch.sort_by_key(|e| if e.is_user_input() { 0u8 } else { 1u8 });
+
+        let mut saw_user_input = false;
+        let mut saw_non_stream = false;
+        let mut saw_stream = false;
+
+        for event in batch {
+            if event.is_user_input() {
+                saw_user_input = true;
+            } else if event.is_stream_chunk() {
+                saw_stream = true;
+            } else {
+                saw_non_stream = true;
+            }
+
             match event {
                 AppEvent::Key(key) => app.handle_key(key),
                 AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
                 AppEvent::Agent(agent_event) => app.handle_agent_event(agent_event),
-                AppEvent::Resize(_, _) => {}
+                AppEvent::Resize(_, _) => {
+                    saw_non_stream = true;
+                }
                 AppEvent::Paste(text) => {
                     if let Ok(clip_text) = crate::clipboard::get_clipboard_text() {
                         app.handle_paste(clip_text);
@@ -2287,6 +2358,17 @@ pub async fn run_tui_with_session(
                     app.handle_tick();
                 }
             }
+        }
+
+        // Immediate redraw for keys / structural UI changes; throttle pure stream paint.
+        if saw_user_input || saw_non_stream {
+            needs_draw = true;
+        } else if saw_stream && last_draw.elapsed() >= STREAM_DRAW_INTERVAL {
+            needs_draw = true;
+        } else if saw_stream {
+            // Keep stream moving: if we skipped a frame, schedule on next opportunity
+            // via a short sleep-free path — next event (tick ~100ms) will redraw.
+            needs_draw = last_draw.elapsed() >= STREAM_DRAW_INTERVAL;
         }
 
         if let Some(seed) = app.editor_requested.take() {

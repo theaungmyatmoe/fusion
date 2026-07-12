@@ -56,14 +56,15 @@ api_key = "xai-your-key"
 
 [settings]
 # Optional agent/delegation tuning
+# (defaults are provider-aware; Cloudflare uses stricter values)
 agent_pacing_ms = 150
 subagent_max_rounds = 12
 subagent_timeout_secs = 900
 subagent_verify_timeout_secs = 120
 # Rate-limit protection when spawning sub-agents
-swarm_max_concurrency = 2
-swarm_spawn_stagger_ms = 750
-llm_max_concurrent = 2
+swarm_max_concurrency = 2      # worker-pool size (true queue, not fire-all)
+swarm_spawn_stagger_ms = 750   # base start gap; multiplies under 429 pressure
+llm_max_concurrent = 2         # shared parent+child HTTP slots (live-updatable)
 ```
 
 ### Environment Variables

@@ -271,6 +271,24 @@ pub async fn run_simple(config: &Config) -> anyhow::Result<()> {
                             println!("    {}{} {}\x1b[0m", color, icon, t.content);
                         }
                     }
+                    AgentEvent::Retrying {
+                        attempt,
+                        max_attempts,
+                        delay_ms,
+                        reason,
+                    } => {
+                        if !is_first_thinking {
+                            print!("\x1b[0m\n");
+                            is_first_thinking = true;
+                        }
+                        eprintln!(
+                            "\n  \x1b[33m⏳ Retry {}/{} in {:.1}s — {}\x1b[0m",
+                            attempt,
+                            max_attempts,
+                            delay_ms as f64 / 1000.0,
+                            reason
+                        );
+                    }
                     AgentEvent::TaskSpawned { task_id, persona, description } => {
                         let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
                         println!("\n  \x1b[38;2;147;197;253;1m+-- [swarm task spawned: {} ({})]\x1b[0m", short_id, persona);

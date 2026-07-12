@@ -298,6 +298,20 @@ async fn main() -> anyhow::Result<()> {
                     fusion_agent::agent::AgentEvent::TaskCompleted { task_id: _, summary } => {
                         println!("\nTask completed successfully:\n{}", summary);
                     }
+                    fusion_agent::agent::AgentEvent::Retrying {
+                        attempt,
+                        max_attempts,
+                        delay_ms,
+                        reason,
+                    } => {
+                        eprintln!(
+                            "[retry {}/{}] {} — waiting {:.1}s",
+                            attempt,
+                            max_attempts,
+                            reason,
+                            delay_ms as f64 / 1000.0
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -440,6 +454,20 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     fusion_agent::agent::AgentEvent::TodoUpdate(_) => {}
+                    fusion_agent::agent::AgentEvent::Retrying {
+                        attempt,
+                        max_attempts,
+                        delay_ms,
+                        reason,
+                    } => {
+                        eprintln!(
+                            "[retry {}/{}] {} — waiting {:.1}s",
+                            attempt,
+                            max_attempts,
+                            reason,
+                            delay_ms as f64 / 1000.0
+                        );
+                    }
                     fusion_agent::agent::AgentEvent::TaskSpawned { task_id, persona, description } => {
                         let short_id = if task_id.len() >= 8 { &task_id[..8] } else { &task_id };
                         eprintln!("[swarm task spawned: {} ({})] {}", short_id, persona, description);

@@ -1,10 +1,11 @@
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Notify;
 
 use fusion_core::config::{is_cloudflare_model, Config, Provider};
 use fusion_core::error::FusionError;
@@ -14,9 +15,7 @@ use fusion_core::error::FusionError;
 // (retryable vs terminal limits), reference/codex (jittered exponential
 // backoff), and reference/grok-cli (Retry-After + multi-attempt 429 recovery).
 
-/// Max concurrent in-flight LLM HTTP requests process-wide.
-/// Parent + spawned sub-agents share this gate so swarm bursts do not trip
-/// provider rate limits.
+/// Max concurrent in-flight LLM HTTP requests process-wide (healthy state).
 const DEFAULT_LLM_MAX_CONCURRENT: usize = 2;
 /// Extra attempts after the first failure (total tries = 1 + this).
 const DEFAULT_LLM_MAX_RETRIES: u32 = 5;
@@ -26,10 +25,202 @@ const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const RETRY_MAX_DELAY_NO_HEADERS: Duration = Duration::from_secs(30);
 /// Absolute cap when the provider asks for a very long wait (pi: 60s default).
 const RETRY_MAX_DELAY_WITH_HEADERS: Duration = Duration::from_secs(60);
+/// After this quiet period without 429s, drop one pressure level.
+const PRESSURE_DECAY_AFTER: Duration = Duration::from_secs(20);
 
-static LLM_API_GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+/// Request priority for fair parent vs sub-agent scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LlmRequestPriority {
+    /// Parent agent — may use the full concurrency budget.
+    #[default]
+    Parent,
+    /// Sub-agent — leaves one slot free for the parent when limit > 1.
+    Subagent,
+}
 
-fn llm_api_gate() -> Arc<Semaphore> {
+/// Provider-aware defaults for rate-limit protection.
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderRateDefaults {
+    pub llm_max_concurrent: usize,
+    pub swarm_max_concurrency: usize,
+    pub spawn_stagger_ms: u64,
+    pub agent_pacing_ms: u64,
+    pub subagent_pacing_ms: u64,
+}
+
+/// Defaults tuned per provider (Cloudflare is the strictest burst limiter).
+pub fn provider_rate_defaults(provider: &Provider) -> ProviderRateDefaults {
+    match provider {
+        Provider::Cloudflare => ProviderRateDefaults {
+            llm_max_concurrent: 1,
+            swarm_max_concurrency: 1,
+            spawn_stagger_ms: 1000,
+            agent_pacing_ms: 250,
+            subagent_pacing_ms: 300,
+        },
+        Provider::Xai | Provider::OpenAi => ProviderRateDefaults {
+            llm_max_concurrent: 2,
+            swarm_max_concurrency: 2,
+            spawn_stagger_ms: 500,
+            agent_pacing_ms: 100,
+            subagent_pacing_ms: 150,
+        },
+        Provider::Faux => ProviderRateDefaults {
+            llm_max_concurrent: 8,
+            swarm_max_concurrency: 4,
+            spawn_stagger_ms: 0,
+            agent_pacing_ms: 0,
+            subagent_pacing_ms: 0,
+        },
+        Provider::Auto => ProviderRateDefaults {
+            llm_max_concurrent: DEFAULT_LLM_MAX_CONCURRENT,
+            swarm_max_concurrency: 2,
+            spawn_stagger_ms: 750,
+            agent_pacing_ms: 150,
+            subagent_pacing_ms: 200,
+        },
+    }
+}
+
+/// Process-wide adaptive concurrency gate.
+///
+/// - Live-configurable base limit (no OnceLock lock-in for the value)
+/// - Pressure rises on 429 and temporarily shrinks effective concurrency
+/// - Parent priority reserves a slot when limit > 1
+struct AdaptiveLlmGate {
+    base_limit: AtomicUsize,
+    active: AtomicUsize,
+    pressure: AtomicU32,
+    notify: Notify,
+    last_rate_limit: Mutex<Option<Instant>>,
+}
+
+impl AdaptiveLlmGate {
+    fn new(base_limit: usize) -> Self {
+        Self {
+            base_limit: AtomicUsize::new(base_limit.max(1)),
+            active: AtomicUsize::new(0),
+            pressure: AtomicU32::new(0),
+            notify: Notify::new(),
+            last_rate_limit: Mutex::new(None),
+        }
+    }
+
+    fn set_base_limit(&self, max: usize) {
+        self.base_limit.store(max.max(1), Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    fn base_limit(&self) -> usize {
+        self.base_limit.load(Ordering::Acquire).max(1)
+    }
+
+    fn pressure(&self) -> u32 {
+        self.pressure.load(Ordering::Acquire)
+    }
+
+    fn effective_limit(&self) -> usize {
+        self.maybe_decay_pressure();
+        let base = self.base_limit();
+        match self.pressure() {
+            0 => base,
+            1 => base.saturating_sub(1).max(1),
+            _ => 1,
+        }
+    }
+
+    fn cap_for_priority(&self, priority: LlmRequestPriority) -> usize {
+        let limit = self.effective_limit();
+        match priority {
+            LlmRequestPriority::Parent => limit,
+            // Reserve one slot for the parent when possible so children cannot
+            // starve the main agent during swarm work.
+            LlmRequestPriority::Subagent if limit > 1 => limit - 1,
+            LlmRequestPriority::Subagent => limit,
+        }
+    }
+
+    fn maybe_decay_pressure(&self) {
+        let pressure = self.pressure();
+        if pressure == 0 {
+            return;
+        }
+        let last = self
+            .last_rate_limit
+            .lock()
+            .ok()
+            .and_then(|g| *g);
+        if let Some(t) = last {
+            if t.elapsed() >= PRESSURE_DECAY_AFTER {
+                self.pressure.fetch_update(Ordering::AcqRel, Ordering::Acquire, |p| {
+                    Some(p.saturating_sub(1))
+                }).ok();
+                self.notify.notify_waiters();
+            }
+        }
+    }
+
+    fn record_rate_limit(&self) {
+        if let Ok(mut g) = self.last_rate_limit.lock() {
+            *g = Some(Instant::now());
+        }
+        self.pressure
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |p| Some((p + 1).min(5)))
+            .ok();
+        self.notify.notify_waiters();
+    }
+
+    fn record_success(&self) {
+        self.maybe_decay_pressure();
+    }
+
+    /// Multiplier for swarm spawn stagger under pressure (1 / 2 / 4).
+    fn spawn_stagger_multiplier(&self) -> u32 {
+        match self.pressure() {
+            0 => 1,
+            1 => 2,
+            _ => 4,
+        }
+    }
+
+    async fn acquire(self: &Arc<Self>, priority: LlmRequestPriority) -> LlmGatePermit {
+        loop {
+            let cap = self.cap_for_priority(priority);
+            let active = self.active.load(Ordering::Acquire);
+            if active < cap {
+                match self.active.compare_exchange(
+                    active,
+                    active + 1,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        return LlmGatePermit {
+                            gate: Arc::clone(self),
+                        };
+                    }
+                    Err(_) => continue,
+                }
+            }
+            self.notify.notified().await;
+        }
+    }
+}
+
+struct LlmGatePermit {
+    gate: Arc<AdaptiveLlmGate>,
+}
+
+impl Drop for LlmGatePermit {
+    fn drop(&mut self) {
+        self.gate.active.fetch_sub(1, Ordering::AcqRel);
+        self.gate.notify.notify_waiters();
+    }
+}
+
+static LLM_API_GATE: OnceLock<Arc<AdaptiveLlmGate>> = OnceLock::new();
+
+fn llm_api_gate() -> Arc<AdaptiveLlmGate> {
     LLM_API_GATE
         .get_or_init(|| {
             let max = std::env::var("FUSION_LLM_MAX_CONCURRENT")
@@ -37,23 +228,48 @@ fn llm_api_gate() -> Arc<Semaphore> {
                 .and_then(|s| s.parse::<usize>().ok())
                 .filter(|&n| n > 0)
                 .unwrap_or(DEFAULT_LLM_MAX_CONCURRENT);
-            Arc::new(Semaphore::new(max))
+            Arc::new(AdaptiveLlmGate::new(max))
         })
         .clone()
 }
 
-/// Configure the process-wide concurrent LLM request limit.
-/// Call before the first `chat()` for it to take effect (OnceLock).
+/// Configure (or live-update) the process-wide concurrent LLM request limit.
 pub fn configure_llm_max_concurrent(max: usize) {
     let max = max.max(1);
-    let _ = LLM_API_GATE.set(Arc::new(Semaphore::new(max)));
+    if let Some(gate) = LLM_API_GATE.get() {
+        gate.set_base_limit(max);
+    } else {
+        let _ = LLM_API_GATE.set(Arc::new(AdaptiveLlmGate::new(max)));
+    }
 }
 
-async fn acquire_llm_permit() -> Result<OwnedSemaphorePermit, FusionError> {
-    llm_api_gate()
-        .acquire_owned()
-        .await
-        .map_err(|_| FusionError::Llm("LLM request gate closed".into()))
+/// Current effective concurrency after adaptive pressure is applied.
+pub fn llm_effective_concurrency() -> usize {
+    llm_api_gate().effective_limit()
+}
+
+/// Current rate-limit pressure level (0 = healthy).
+pub fn llm_rate_limit_pressure() -> u32 {
+    llm_api_gate().pressure()
+}
+
+/// Spawn stagger scaled by adaptive pressure.
+pub fn adaptive_spawn_stagger(base: Duration) -> Duration {
+    let mult = llm_api_gate().spawn_stagger_multiplier();
+    base.saturating_mul(mult)
+}
+
+/// #[cfg(test)] helper — reset pressure between tests when possible.
+#[cfg(test)]
+pub fn reset_llm_gate_for_tests(base_limit: usize) {
+    let gate = llm_api_gate();
+    gate.set_base_limit(base_limit);
+    gate.pressure.store(0, Ordering::Release);
+    if let Ok(mut guard) = gate.last_rate_limit.lock() {
+        *guard = None;
+    }
+    // Explicitly drop before function end so the MutexGuard outlives nothing.
+    drop(gate);
 }
 
 pub mod faux {
@@ -179,16 +395,28 @@ pub struct ChatResult {
 pub enum LlmEvent {
     Thinking(String),
     TextDelta(String),
+    /// Provider rate-limit / transient failure — sleeping before retry.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        reason: String,
+    },
 }
 
 /// Unified LLM client that routes to the correct provider.
 pub struct LlmClient {
     config: Config,
     http: reqwest::Client,
+    priority: LlmRequestPriority,
 }
 
 impl LlmClient {
     pub fn new(config: &Config) -> Self {
+        Self::with_priority(config, LlmRequestPriority::Parent)
+    }
+
+    pub fn with_priority(config: &Config, priority: LlmRequestPriority) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .timeout(std::time::Duration::from_secs(300))
@@ -199,6 +427,7 @@ impl LlmClient {
         Self {
             config: config.clone(),
             http,
+            priority,
         }
     }
 
@@ -221,8 +450,8 @@ impl LlmClient {
     /// Send a chat completion request. If event_tx is provided, it streams chunks in real-time.
     ///
     /// All clients (parent agent + spawned sub-agents) share a process-wide
-    /// concurrency gate and retry policy so parallel swarm work does not burst
-    /// the provider into 429 lockouts.
+    /// adaptive concurrency gate and retry policy so parallel swarm work does
+    /// not burst the provider into 429 lockouts.
     pub async fn chat(
         &self,
         options: ChatOptions,
@@ -234,21 +463,44 @@ impl LlmClient {
             .unwrap_or(DEFAULT_LLM_MAX_RETRIES);
 
         let mut attempt: u32 = 0;
+        let gate = llm_api_gate();
 
         loop {
             // Hold the permit for the full request so concurrent sub-agents
             // queue instead of flooding the API.
-            let _permit = acquire_llm_permit().await?;
+            let _permit = gate.acquire(self.priority).await;
 
             match self.chat_attempt(options.clone(), event_tx.clone()).await {
-                Ok(res) => return Ok(res),
+                Ok(res) => {
+                    gate.record_success();
+                    return Ok(res);
+                }
                 Err(err) => {
+                    if err.is_rate_limit {
+                        gate.record_rate_limit();
+                    }
+
                     if attempt >= max_retries || !err.retryable {
                         return Err(FusionError::Llm(err.message));
                     }
 
                     attempt += 1;
                     let delay = retry_delay(attempt, err.retry_after, err.is_rate_limit);
+                    let reason = if err.is_rate_limit {
+                        "rate limited".to_string()
+                    } else {
+                        "transient provider error".to_string()
+                    };
+
+                    if let Some(ref tx) = event_tx {
+                        let _ = tx.send(LlmEvent::Retrying {
+                            attempt,
+                            max_attempts: max_retries,
+                            delay_ms: delay.as_millis() as u64,
+                            reason: reason.clone(),
+                        });
+                    }
+
                     // Drop permit before sleeping so other agents can proceed.
                     drop(_permit);
                     tokio::time::sleep(delay).await;
@@ -1187,6 +1439,11 @@ pub fn create_llm_client(config: &Config) -> LlmClient {
     LlmClient::new(config)
 }
 
+/// Sub-agent client — lower priority so the parent retains a concurrency slot.
+pub fn create_subagent_llm_client(config: &Config) -> LlmClient {
+    LlmClient::with_priority(config, LlmRequestPriority::Subagent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1361,6 +1618,45 @@ mod tests {
         assert!(is_terminal_provider_limit("GoUsageLimitError"));
         assert!(is_terminal_provider_limit("insufficient_quota"));
         assert!(!is_terminal_provider_limit("Rate limit exceeded, retry later"));
+    }
+
+    #[test]
+    fn test_provider_rate_defaults_cloudflare_is_strictest() {
+        let cf = provider_rate_defaults(&Provider::Cloudflare);
+        let xai = provider_rate_defaults(&Provider::Xai);
+        assert!(cf.llm_max_concurrent <= xai.llm_max_concurrent);
+        assert!(cf.spawn_stagger_ms >= xai.spawn_stagger_ms);
+    }
+
+    #[test]
+    fn test_adaptive_gate_pressure_reduces_limit() {
+        reset_llm_gate_for_tests(2);
+        let gate = llm_api_gate();
+        assert_eq!(gate.effective_limit(), 2);
+        gate.record_rate_limit();
+        assert_eq!(gate.effective_limit(), 1);
+        assert!(gate.spawn_stagger_multiplier() >= 2);
+        // Clean up for other tests
+        reset_llm_gate_for_tests(2);
+    }
+
+    #[test]
+    fn test_configure_llm_max_concurrent_is_live() {
+        reset_llm_gate_for_tests(2);
+        configure_llm_max_concurrent(3);
+        assert_eq!(llm_api_gate().base_limit(), 3);
+        configure_llm_max_concurrent(1);
+        assert_eq!(llm_api_gate().base_limit(), 1);
+        reset_llm_gate_for_tests(2);
+    }
+
+    #[test]
+    fn test_subagent_cap_reserves_parent_slot() {
+        reset_llm_gate_for_tests(2);
+        let gate = llm_api_gate();
+        assert_eq!(gate.cap_for_priority(LlmRequestPriority::Parent), 2);
+        assert_eq!(gate.cap_for_priority(LlmRequestPriority::Subagent), 1);
+        reset_llm_gate_for_tests(2);
     }
 
     #[test]

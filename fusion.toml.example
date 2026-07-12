@@ -45,7 +45,8 @@ api_key = "YOUR_CLOUDFLARE_API_TOKEN"
 # subagent_timeout_secs = 900
 # subagent_verify_timeout_secs = 120
 #
-# Swarm / rate-limit controls (prevents 429 when spawning sub-agents):
-# swarm_max_concurrency = 2     # max parallel sub-agents
-# swarm_spawn_stagger_ms = 750  # pause between launching each sub-agent
-# llm_max_concurrent = 2        # process-wide concurrent LLM HTTP requests
+# Swarm / rate-limit controls (prevents 429 when spawning sub-agents).
+# Defaults are provider-aware (Cloudflare is strictest). Explicit values override.
+# swarm_max_concurrency = 2     # max parallel sub-agents (worker-pool queue)
+# swarm_spawn_stagger_ms = 750  # base pause between starting queued jobs (grows under 429 pressure)
+# llm_max_concurrent = 2        # process-wide concurrent LLM HTTP requests (live-updatable)

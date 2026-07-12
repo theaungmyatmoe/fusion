@@ -16,6 +16,13 @@ pub enum AgentEvent {
     ToolResult { name: String, output: String },
     FinalResponse(String),
     TodoUpdate(Vec<TodoItem>),
+    /// Provider rate-limit / transient failure — sleeping before retry.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        reason: String,
+    },
     /// A sub-agent task was spawned.
     TaskSpawned {
         task_id: String,
@@ -66,18 +73,22 @@ impl Agent {
             .or_else(|| std::env::var("KEENABLE_API_KEY").ok());
         let tool_registry = ToolRegistry::new(&cwd, None, keenable_api_key);
 
-        // Cap concurrent sub-agents (default 2) so spawning does not trip provider limits.
+        // Provider-aware defaults (Cloudflare is strictest); settings override.
+        let defaults = fusion_llm::client::provider_rate_defaults(&config.provider);
+
         let max_concurrency = setting_u64(
             config,
             "swarm_max_concurrency",
-            TaskSwarm::default_max_concurrency() as u64,
+            defaults.swarm_max_concurrency as u64,
         )
         .max(1) as usize;
-        let spawn_stagger_ms = setting_u64(config, "swarm_spawn_stagger_ms", 750);
+        let spawn_stagger_ms =
+            setting_u64(config, "swarm_spawn_stagger_ms", defaults.spawn_stagger_ms);
 
-        // Process-wide LLM HTTP concurrency (parent + all sub-agents).
-        // Must be configured before the first chat() call.
-        let llm_max_concurrent = setting_u64(config, "llm_max_concurrent", 2).max(1) as usize;
+        // Process-wide LLM HTTP concurrency (parent + all sub-agents). Live-updatable.
+        let llm_max_concurrent =
+            setting_u64(config, "llm_max_concurrent", defaults.llm_max_concurrent as u64).max(1)
+                as usize;
         fusion_llm::client::configure_llm_max_concurrent(llm_max_concurrent);
 
         Self {
@@ -348,11 +359,21 @@ impl Agent {
             let max_rounds = self.max_rounds;
 
             for round in 0..max_rounds {
-                // Light default pacing between rounds reduces burst 429s when tools
-                // fire rapidly; set agent_pacing_ms = 0 to disable.
-                let pacing_ms = setting_u64(&self.config, "agent_pacing_ms", 150);
-                if round > 0 && pacing_ms > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(pacing_ms)).await;
+                // Provider-aware pacing between rounds; set agent_pacing_ms = 0 to disable.
+                let pacing_default =
+                    fusion_llm::client::provider_rate_defaults(&self.config.provider).agent_pacing_ms;
+                let pacing_ms = setting_u64(&self.config, "agent_pacing_ms", pacing_default);
+                // Under rate-limit pressure, stretch pacing further.
+                let pressure = fusion_llm::client::llm_rate_limit_pressure();
+                let effective_pacing = if pressure == 0 {
+                    pacing_ms
+                } else if pressure == 1 {
+                    pacing_ms.saturating_mul(2)
+                } else {
+                    pacing_ms.saturating_mul(4)
+                };
+                if round > 0 && effective_pacing > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(effective_pacing)).await;
                 }
 
                 // Drain completed background tasks and inject outcomes
@@ -400,14 +421,7 @@ impl Agent {
                 // Spawn background task to forward streaming events to TUI in real-time
                 let forwarder = tokio::spawn(async move {
                     while let Some(llm_event) = llm_rx.recv().await {
-                        match llm_event {
-                            fusion_llm::client::LlmEvent::Thinking(chunk) => {
-                                let _ = tx_clone.send(AgentEvent::Thinking(chunk));
-                            }
-                            fusion_llm::client::LlmEvent::TextDelta(chunk) => {
-                                let _ = tx_clone.send(AgentEvent::TextDelta(chunk));
-                            }
-                        }
+                        forward_llm_event(&tx_clone, llm_event);
                     }
                 });
 
@@ -516,14 +530,7 @@ impl Agent {
             let tx_clone = tx.clone();
             let forwarder = tokio::spawn(async move {
                 while let Some(llm_event) = llm_rx.recv().await {
-                    match llm_event {
-                        fusion_llm::client::LlmEvent::Thinking(chunk) => {
-                            let _ = tx_clone.send(AgentEvent::Thinking(chunk));
-                        }
-                        fusion_llm::client::LlmEvent::TextDelta(chunk) => {
-                            let _ = tx_clone.send(AgentEvent::TextDelta(chunk));
-                        }
-                    }
+                    forward_llm_event(&tx_clone, llm_event);
                 }
             });
 
@@ -632,6 +639,13 @@ impl Agent {
     pub fn reload_config(&mut self, config: &Config) {
         self.config = config.clone();
         self.llm.update_config(config);
+
+        // Live-update process-wide LLM concurrency from reloaded settings.
+        let defaults = fusion_llm::client::provider_rate_defaults(&config.provider);
+        let llm_max_concurrent =
+            setting_u64(config, "llm_max_concurrent", defaults.llm_max_concurrent as u64).max(1)
+                as usize;
+        fusion_llm::client::configure_llm_max_concurrent(llm_max_concurrent);
     }
 
     pub fn set_max_tokens(&mut self, max_tokens: Option<u32>) {
@@ -681,6 +695,33 @@ fn setting_u64(config: &Config, key: &str, default: u64) -> u64 {
         .get(key)
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(default)
+}
+
+fn forward_llm_event(
+    tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    event: fusion_llm::client::LlmEvent,
+) {
+    match event {
+        fusion_llm::client::LlmEvent::Thinking(chunk) => {
+            let _ = tx.send(AgentEvent::Thinking(chunk));
+        }
+        fusion_llm::client::LlmEvent::TextDelta(chunk) => {
+            let _ = tx.send(AgentEvent::TextDelta(chunk));
+        }
+        fusion_llm::client::LlmEvent::Retrying {
+            attempt,
+            max_attempts,
+            delay_ms,
+            reason,
+        } => {
+            let _ = tx.send(AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                delay_ms,
+                reason,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
