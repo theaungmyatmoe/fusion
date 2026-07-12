@@ -25,10 +25,28 @@ ARCH=$(uname -m)
 if [ -f "/etc/alpine-release" ]; then
     PLATFORM="alpine"
     INSTALL_DIR="/usr/local/bin"
+    
+    # Auto-install dependencies if missing on Alpine
+    if ! command -v git >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || [ ! -f /etc/ssl/certs/ca-certificates.crt ]; then
+        info "Installing missing dependencies (git, ripgrep, ca-certificates)..."
+        if command -v apk >/dev/null 2>&1; then
+            apk update
+            apk add git ripgrep ca-certificates
+        else
+            err "apk packet manager not found. Please install git, ripgrep, and ca-certificates manually."
+        fi
+    fi
 # Termux detection
 elif [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q "com.termux"; then
     PLATFORM="termux"
     INSTALL_DIR="$PREFIX/bin"
+    
+    # Auto-install dependencies if missing on Termux
+    if ! command -v git >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1; then
+        info "Installing missing dependencies (git, ripgrep)..."
+        pkg update -y || true
+        pkg install -y git ripgrep
+    fi
 elif [ "$OS" = "darwin" ]; then
     PLATFORM="macos"
     INSTALL_DIR="$HOME/.local/bin"

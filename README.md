@@ -4,16 +4,13 @@ Fusion is a terminal-based AI coding assistant inspired by OpenAI Codex CLI. It 
 
 ## Install
 
-| Platform | One-Line Install |
-|---|---|
-| **macOS** | `curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh \| sh` |
-| **Linux** | `curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh \| sh` |
-| **Alpine Linux** | `curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh \| sh` |
-| **Android (Termux)** | `curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh \| sh` |
-| **iOS (UTM VM)** | `curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh \| sh` |
-| **iOS (iSH Alpine)** | `curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/ish-bootstrap.sh \| sh` |
+To install Fusion on **macOS**, **Linux**, **Alpine Linux**, **Android (Termux)**, or **iOS (iSH / UTM VMs)**, run the following one-line command:
 
-> **Note** — The iSH bootstrap installs `curl`, `git`, and `ripgrep` first, then runs the standard installer. iSH does not support the full Ratatui TUI; it falls back to a lightweight REPL automatically.
+```bash
+curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
+```
+
+> **Note** — The installer automatically detects your platform, checks for and installs missing dependencies (like `git`, `ripgrep`, and `ca-certificates` on Alpine/iSH or Termux), downloads the optimized precompiled binary, and registers it. On iOS (iSH), Fusion automatically falls back to a lightweight REPL interface.
 
 ### Android — Secure Alpine Sandbox (Optional)
 
@@ -85,6 +82,8 @@ fusion --simple           # Launch lightweight scrollback REPL
 fusion -p "your task"     # Execute task headless
 fusion --model grok-3     # Override model
 fusion --yolo             # Auto-approve all shell executions
+fusion --tasks            # List background tasks and sub-agent sessions
+fusion --resume-task <id> # Resume a sub-agent task session by ID
 fusion --upgrade          # Self-upgrade to the latest version
 ```
 

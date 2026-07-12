@@ -589,7 +589,7 @@ impl App {
             let cwd = self.session.cwd.clone();
             let dest_path = std::path::Path::new(&cwd).join(&filename);
 
-            let token = format!("@{} ", filename);
+            let token = format!("[Image: {}] ", filename);
             self.input.push_str(&token);
 
             let pending_tag = format!("PENDING:{}", dest_path.to_string_lossy());
@@ -839,7 +839,7 @@ impl App {
                 let cwd = self.session.cwd.clone();
                 let dest_path = std::path::Path::new(&cwd).join(&filename);
 
-                let token = format!("@{} ", filename);
+                let token = format!("[Image: {}] ", filename);
                 self.input.push_str(&token);
 
                 let pending_tag = format!("PENDING:{}", dest_path.to_string_lossy());
@@ -864,7 +864,7 @@ impl App {
                 let cwd = self.session.cwd.clone();
                 let dest_path = std::path::Path::new(&cwd).join(&filename);
 
-                let token = format!("@{} ", filename);
+                let token = format!("[Image: {}] ", filename);
                 self.input.push_str(&token);
 
                 let pending_tag = format!("PENDING:{}", dest_path.to_string_lossy());
@@ -993,21 +993,17 @@ impl App {
                     let mut deleted_image_filename: Option<String> = None;
                     let mut is_paste_token = false;
 
-                    // Check for @image_<timestamp>.png token at the end
-                    if let Some(last_word) = trimmed.split_whitespace().last() {
-                        if last_word.starts_with('@') && last_word.ends_with(".png") {
-                            is_image_token = true;
-                            deleted_image_filename = Some(last_word[1..].to_string());
-                            let spaces_count = self.input.len() - trimmed.len();
-                            matched_token_len = Some(last_word.len() + spaces_count);
-                        }
-                    }
-
-                    // Fallback: check for [Pasted: ...] or legacy [Image #N] bracket tokens
-                    if matched_token_len.is_none() && trimmed.ends_with(']') {
+                    // Check for bracketed placeholders: [Image: ...], [Image #...], or [Pasted: ...]
+                    if trimmed.ends_with(']') {
                         if let Some(start_idx) = trimmed.rfind('[') {
                             let token = &trimmed[start_idx..];
-                            if token.starts_with("[Image #") {
+                            if token.starts_with("[Image: ") {
+                                is_image_token = true;
+                                let filename = token[8..token.len() - 1].to_string();
+                                deleted_image_filename = Some(filename);
+                                let spaces_count = self.input.len() - trimmed.len();
+                                matched_token_len = Some(token.len() + spaces_count);
+                            } else if token.starts_with("[Image #") {
                                 is_image_token = true;
                                 let spaces_count = self.input.len() - trimmed.len();
                                 matched_token_len = Some(token.len() + spaces_count);
@@ -2585,17 +2581,17 @@ mod tests {
         // Should have one pending image
         assert_eq!(app.attached_images.len(), 1);
         assert!(app.attached_images[0].starts_with("PENDING:"));
-        // Input should contain an @image_... token
-        assert!(app.input.contains("@image_"));
+        // Input should contain an [Image: image_... ] token
+        assert!(app.input.contains("[Image: image_"));
 
-        // Backspace should atomically delete the @image_xxx.png token
+        // Backspace should atomically delete the [Image: image_xxx.png] token
         let bs_key = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Backspace,
             crossterm::event::KeyModifiers::empty(),
         );
         app.handle_key(bs_key);
-        // After backspace, the @image_... token should be gone and attached_images empty
-        assert!(!app.input.contains("@image_"));
+        // After backspace, the [Image: image_... ] token should be gone and attached_images empty
+        assert!(!app.input.contains("[Image: image_"));
         assert!(app.attached_images.is_empty());
 
         let _ = std::fs::remove_file(img_path);

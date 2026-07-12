@@ -1,9 +1,60 @@
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use futures::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use fusion_core::config::{is_cloudflare_model, Config, Provider};
 use fusion_core::error::FusionError;
+
+// ── Rate-limit / concurrency guards (shared across parent + sub-agents) ──────
+// Strategy adapted from reference/opencode (retry headers), reference/pi
+// (retryable vs terminal limits), reference/codex (jittered exponential
+// backoff), and reference/grok-cli (Retry-After + multi-attempt 429 recovery).
+
+/// Max concurrent in-flight LLM HTTP requests process-wide.
+/// Parent + spawned sub-agents share this gate so swarm bursts do not trip
+/// provider rate limits.
+const DEFAULT_LLM_MAX_CONCURRENT: usize = 2;
+/// Extra attempts after the first failure (total tries = 1 + this).
+const DEFAULT_LLM_MAX_RETRIES: u32 = 5;
+/// Initial backoff when no Retry-After header is present (opencode: 2s).
+const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(2);
+/// Cap for header-less exponential backoff (opencode: 30s).
+const RETRY_MAX_DELAY_NO_HEADERS: Duration = Duration::from_secs(30);
+/// Absolute cap when the provider asks for a very long wait (pi: 60s default).
+const RETRY_MAX_DELAY_WITH_HEADERS: Duration = Duration::from_secs(60);
+
+static LLM_API_GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn llm_api_gate() -> Arc<Semaphore> {
+    LLM_API_GATE
+        .get_or_init(|| {
+            let max = std::env::var("FUSION_LLM_MAX_CONCURRENT")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(DEFAULT_LLM_MAX_CONCURRENT);
+            Arc::new(Semaphore::new(max))
+        })
+        .clone()
+}
+
+/// Configure the process-wide concurrent LLM request limit.
+/// Call before the first `chat()` for it to take effect (OnceLock).
+pub fn configure_llm_max_concurrent(max: usize) {
+    let max = max.max(1);
+    let _ = LLM_API_GATE.set(Arc::new(Semaphore::new(max)));
+}
+
+async fn acquire_llm_permit() -> Result<OwnedSemaphorePermit, FusionError> {
+    llm_api_gate()
+        .acquire_owned()
+        .await
+        .map_err(|_| FusionError::Llm("LLM request gate closed".into()))
+}
 
 pub mod faux {
     use super::ChatResult;
@@ -168,26 +219,39 @@ impl LlmClient {
     }
 
     /// Send a chat completion request. If event_tx is provided, it streams chunks in real-time.
+    ///
+    /// All clients (parent agent + spawned sub-agents) share a process-wide
+    /// concurrency gate and retry policy so parallel swarm work does not burst
+    /// the provider into 429 lockouts.
     pub async fn chat(
         &self,
         options: ChatOptions,
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
     ) -> Result<ChatResult, FusionError> {
-        let mut retries = 3;
-        let mut backoff = std::time::Duration::from_secs(1);
+        let max_retries = std::env::var("FUSION_LLM_MAX_RETRIES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_LLM_MAX_RETRIES);
+
+        let mut attempt: u32 = 0;
 
         loop {
+            // Hold the permit for the full request so concurrent sub-agents
+            // queue instead of flooding the API.
+            let _permit = acquire_llm_permit().await?;
+
             match self.chat_attempt(options.clone(), event_tx.clone()).await {
                 Ok(res) => return Ok(res),
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if retries > 0 && is_retryable_error(&err_msg) {
-                        tokio::time::sleep(backoff).await;
-                        retries -= 1;
-                        backoff *= 2;
-                        continue;
+                Err(err) => {
+                    if attempt >= max_retries || !err.retryable {
+                        return Err(FusionError::Llm(err.message));
                     }
-                    return Err(e);
+
+                    attempt += 1;
+                    let delay = retry_delay(attempt, err.retry_after, err.is_rate_limit);
+                    // Drop permit before sleeping so other agents can proceed.
+                    drop(_permit);
+                    tokio::time::sleep(delay).await;
                 }
             }
         }
@@ -370,6 +434,7 @@ impl LlmClient {
         let mut accumulated_content = String::new();
         let mut accumulated_reasoning = String::new();
         let mut accumulated_tool_calls: Vec<ToolCallBuilder> = Vec::new();
+        let mut stream_filter = StreamFilter::new();
 
         while let Some(event) = event_source.next().await {
             match event {
@@ -391,9 +456,9 @@ impl LlmClient {
                                         if !content_str.is_empty() {
                                             accumulated_content.push_str(content_str);
                                             if let Some(ref tx) = event_tx {
-                                                let _ = tx.send(LlmEvent::TextDelta(
-                                                    content_str.to_string(),
-                                                ));
+                                                if let Some(clean_chunk) = stream_filter.feed(content_str) {
+                                                    let _ = tx.send(LlmEvent::TextDelta(clean_chunk));
+                                                }
                                             }
                                         }
                                     }
@@ -457,6 +522,12 @@ impl LlmClient {
             }
         }
 
+        if let Some(ref tx) = event_tx {
+            if let Some(flushed) = stream_filter.flush() {
+                let _ = tx.send(LlmEvent::TextDelta(flushed));
+            }
+        }
+
         let mut final_tool_calls: Vec<ToolCall> = accumulated_tool_calls
             .into_iter()
             .filter(|b| !b.name.is_empty())
@@ -468,12 +539,16 @@ impl LlmClient {
             .collect();
 
         // FALLBACK: Parse XML-style and plain-text tool calls from the text response body
+        let mut final_content = accumulated_content.clone();
         if final_tool_calls.is_empty() && !accumulated_content.is_empty() {
             final_tool_calls = parse_fallback_tool_calls(&accumulated_content);
+            if !final_tool_calls.is_empty() {
+                final_content = strip_fallback_tool_calls(&accumulated_content);
+            }
         }
 
         Ok(ChatResult {
-            content: accumulated_content,
+            content: final_content,
             reasoning_content: if accumulated_reasoning.is_empty() {
                 None
             } else {
@@ -822,6 +897,143 @@ pub(crate) fn parse_fallback_tool_calls(accumulated_content: &str) -> Vec<ToolCa
     final_tool_calls
 }
 
+pub(crate) fn strip_fallback_tool_calls(content: &str) -> String {
+    let mut clean = content.to_string();
+
+    // 1. Strip XML-style: <tool_call ...>...</tool_call>
+    while let Some(start_idx) = clean.find("<tool_call name=\"") {
+        if let Some(end_idx) = clean[start_idx..].find("</tool_call>") {
+            let total_end = start_idx + end_idx + 12; // length of "</tool_call>" is 12
+            clean.replace_range(start_idx..total_end, "");
+        } else {
+            // If unterminated, strip from <tool_call to end of string
+            clean.replace_range(start_idx.., "");
+            break;
+        }
+    }
+
+    // 2. Strip plain-text style: Calling tool ... with arguments: ...
+    while let Some(start_idx) = clean.find("Calling tool ") {
+        let name_start = start_idx + 13;
+        if let Some(with_args_idx) = clean[name_start..].find(" with arguments:") {
+            let rest = &clean[name_start + with_args_idx + 16..];
+            if let Some((_, consumed)) = parse_first_json_object(rest) {
+                let total_end = name_start + with_args_idx + 16 + consumed;
+                clean.replace_range(start_idx..total_end, "");
+                continue;
+            }
+        }
+        break;
+    }
+
+    clean.trim().to_string()
+}
+
+pub(crate) struct StreamFilter {
+    buffer: String,
+    in_xml: bool,
+    in_calling: bool,
+}
+
+impl StreamFilter {
+    pub fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            in_xml: false,
+            in_calling: false,
+        }
+    }
+
+    pub fn feed(&mut self, chunk: &str) -> Option<String> {
+        self.buffer.push_str(chunk);
+
+        // Check if we detect starting of a tool call
+        if !self.in_xml && !self.in_calling {
+            // Check if buffer contains starting sequence of XML tool call
+            if let Some(pos) = self.buffer.find('<') {
+                let candidate = &self.buffer[pos..];
+                if "<tool_call".starts_with(candidate) || candidate.starts_with("<tool_call") {
+                    self.in_xml = true;
+                    let prefix = self.buffer[..pos].to_string();
+                    self.buffer = candidate.to_string();
+                    if !prefix.is_empty() {
+                        return Some(prefix);
+                    }
+                    return None;
+                }
+            }
+
+            // Check if buffer contains starting sequence of plain-text tool call
+            if let Some(pos) = self.buffer.find('C') {
+                let candidate = &self.buffer[pos..];
+                if "Calling tool ".starts_with(candidate) || candidate.starts_with("Calling tool ") {
+                    self.in_calling = true;
+                    let prefix = self.buffer[..pos].to_string();
+                    self.buffer = candidate.to_string();
+                    if !prefix.is_empty() {
+                        return Some(prefix);
+                    }
+                    return None;
+                }
+            }
+
+            // No suspicious prefix detected, return everything
+            let out = self.buffer.clone();
+            self.buffer.clear();
+            return Some(out);
+        }
+
+        if self.in_xml {
+            // We are buffering XML-style tool call.
+            // Check if we find the closing tag "</tool_call>"
+            if let Some(pos) = self.buffer.find("</tool_call>") {
+                self.buffer = self.buffer[pos + 12..].to_string(); // Skip </tool_call>
+                self.in_xml = false;
+                let remainder = self.buffer.clone();
+                self.buffer.clear();
+                return self.feed(&remainder);
+            }
+            return None;
+        }
+
+        if self.in_calling {
+            // We are buffering "Calling tool ..."
+            if let Some(args_pos) = self.buffer.find(" with arguments:") {
+                let json_part = &self.buffer[args_pos + 16..];
+                if let Some((_, consumed)) = parse_first_json_object(json_part) {
+                    let total_end = args_pos + 16 + consumed;
+                    self.buffer = self.buffer[total_end..].to_string();
+                    self.in_calling = false;
+                    let remainder = self.buffer.clone();
+                    self.buffer.clear();
+                    return self.feed(&remainder);
+                }
+            }
+            // If the buffer grows too large without seeing JSON, it might not be a tool call.
+            if self.buffer.len() > 1000 {
+                let out = self.buffer.clone();
+                self.buffer.clear();
+                self.in_calling = false;
+                return Some(out);
+            }
+            return None;
+        }
+
+        None
+    }
+
+    pub fn flush(&mut self) -> Option<String> {
+        if !self.buffer.is_empty() {
+            let out = self.buffer.clone();
+            self.buffer.clear();
+            self.in_xml = false;
+            self.in_calling = false;
+            return Some(out);
+        }
+        None
+    }
+}
+
 /// Convenience constructor.
 pub fn create_llm_client(config: &Config) -> LlmClient {
     LlmClient::new(config)
@@ -966,5 +1178,33 @@ mod tests {
 
         assert_eq!(arguments["path"], "a.css");
         assert_eq!(arguments["content"], "x");
+    }
+
+    #[test]
+    fn test_strip_fallback_tool_calls() {
+        let content = "I will write files now. <tool_call name=\"write_file\">{\"path\": \"src/index.css\"}</tool_call> Done.";
+        let stripped = strip_fallback_tool_calls(content);
+        assert_eq!(stripped, "I will write files now.  Done.");
+
+        let content_plain = "I will run the command. Calling tool run_command with arguments: {\"command\": \"npm test\"} End.";
+        let stripped_plain = strip_fallback_tool_calls(content_plain);
+        assert_eq!(stripped_plain, "I will run the command.  End.");
+    }
+
+    #[test]
+    fn test_stream_filter() {
+        let mut filter = StreamFilter::new();
+        
+        let chunk1 = filter.feed("Hello world! <tool_c");
+        assert_eq!(chunk1, Some("Hello world! ".to_string()));
+        
+        let chunk2 = filter.feed("all name=\"test\">{\"x\": 1}</tool_call> Goodbye");
+        assert_eq!(chunk2, Some(" Goodbye".to_string()));
+
+        let mut filter2 = StreamFilter::new();
+        let chunk3 = filter2.feed("Calling tool test ");
+        assert_eq!(chunk3, None); // Should buffer because it might match "Calling tool "
+        let chunk4 = filter2.feed("with arguments: {\"a\": 1} Done.");
+        assert_eq!(chunk4, Some(" Done.".to_string()));
     }
 }
