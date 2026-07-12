@@ -2,7 +2,9 @@
 
 Fusion is a terminal-based AI coding assistant inspired by OpenAI Codex CLI. It runs as a **single static binary** with no external dependencies.
 
-![Fusion Code TUI Interface](docs/screenshot.png)
+| Desktop view | Mobile view |
+|:---:|:---:|
+| ![Fusion Code TUI Interface](docs/screenshot.png) | ![Fusion Code Mobile Interface](docs/screenshot_mobile.png) |
 
 ## Install
 
