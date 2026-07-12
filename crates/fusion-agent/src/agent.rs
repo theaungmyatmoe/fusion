@@ -154,12 +154,14 @@ impl Agent {
                  Do not keep calling tools indefinitely — be efficient and wrap up.",
                  self.config.model
             );
-                // Load any specialized local or global skills
+                // Load any specialized local or global skills (dynamically loaded via use_skill tool)
                 let skills = fusion_core::config::load_skills(&self.cwd);
                 if !skills.is_empty() {
-                    sys_prompt.push_str("\n\nAVAILABLE SPECIALIZED SKILLS AND BEST PRACTICES:\n");
-                    for (name, content) in skills {
-                        sys_prompt.push_str(&format!("--- SKILL: {} ---\n{}\n\n", name, content));
+                    sys_prompt.push_str("\n\nAVAILABLE SPECIALIZED SKILLS:\n\
+                    You have access to the following specialized skills, which are guidelines for specific libraries or APIs. \
+                    You only see their names here. If you need to write code using one of these skills, you MUST call the `use_skill` tool to read the skill's complete guidelines first.\n");
+                    for (name, _) in skills {
+                        sys_prompt.push_str(&format!("- {} (Use tool `use_skill` with this name to load its instructions)\n", name));
                     }
                 }
 

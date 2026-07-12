@@ -1,9 +1,19 @@
+use serde::Deserialize;
 use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::time::timeout;
+
+#[derive(Deserialize)]
+struct RunCommandArgs {
+    command: String,
+    timeout_secs: Option<u64>,
+    head_lines: Option<usize>,
+    tail_lines: Option<usize>,
+    _reason: Option<String>,
+}
 
 /// Execute a shell command with permission prompt and timeout.
 pub async fn execute(
@@ -21,15 +31,15 @@ pub async fn execute_streaming(
     args: &serde_json::Value,
     output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<String, String> {
-    let command_raw = args["command"]
-        .as_str()
-        .ok_or("run_command: command is required")?;
-    let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(30);
+    let args: RunCommandArgs = serde_json::from_value(args.clone())
+        .map_err(|e| format!("Invalid run_command arguments: {}", e))?;
+
+    let timeout_secs = args.timeout_secs.unwrap_or(30);
 
     let command = if let Some(main) = main_cwd {
-        command_raw.replace(main, cwd)
+        args.command.replace(main, cwd)
     } else {
-        command_raw.to_string()
+        args.command.clone()
     };
 
     let mut child = Command::new("sh");
@@ -37,6 +47,9 @@ pub async fn execute_streaming(
         .arg("-c")
         .arg(&command)
         .current_dir(cwd)
+        .env("PAGER", "cat")
+        .env("EDITOR", "true")
+        .env("GIT_EDITOR", "true")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -73,12 +86,14 @@ pub async fn execute_streaming(
         Ok::<_, String>((status.code().unwrap_or(-1), stdout, stderr))
     };
 
-    let (exit_code, stdout, stderr) = timeout(Duration::from_secs(timeout_secs), run)
+    let (exit_code, stdout_bytes, stderr_bytes) = timeout(Duration::from_secs(timeout_secs), run)
         .await
         .map_err(|_| format!("Command timed out after {} seconds", timeout_secs))??;
 
-    let stdout = String::from_utf8_lossy(&stdout);
-    let stderr = String::from_utf8_lossy(&stderr);
+    let stdout_raw = String::from_utf8_lossy(&stdout_bytes);
+    let stdout = slice_output(&stdout_raw, args.head_lines, args.tail_lines);
+
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
     let mut result = String::new();
     if !stdout.is_empty() {
         result.push_str(&stdout);
@@ -100,6 +115,38 @@ pub async fn execute_streaming(
     }
 
     Ok(result)
+}
+
+fn slice_output(output: &str, head_lines: Option<usize>, tail_lines: Option<usize>) -> String {
+    if head_lines.is_none() && tail_lines.is_none() {
+        return output.to_string();
+    }
+    let lines: Vec<&str> = output.lines().collect();
+    let total_lines = lines.len();
+
+    let head = head_lines.unwrap_or(0);
+    let tail = tail_lines.unwrap_or(0);
+
+    if head + tail >= total_lines {
+        return output.to_string();
+    }
+
+    let mut result = Vec::new();
+    if head > 0 {
+        result.extend_from_slice(&lines[..head]);
+    }
+    if head > 0 || tail > 0 {
+        result.push("... [output truncated to save context tokens] ...");
+    }
+    if tail > 0 {
+        result.extend_from_slice(&lines[total_lines - tail..]);
+    }
+
+    let mut joined = result.join("\n");
+    if output.ends_with('\n') && !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 async fn read_stream<R>(
@@ -150,4 +197,16 @@ mod tests {
         assert_eq!(result, "firstsecond");
         assert_eq!(streamed, "firstsecond");
     }
+
+    #[tokio::test]
+    async fn slices_command_output() {
+        let args = serde_json::json!({
+            "command": "printf 'line1\nline2\nline3\nline4\nline5\n'",
+            "head_lines": 2,
+            "tail_lines": 1
+        });
+        let result = super::execute(".", None, &args).await.expect("command should succeed");
+        assert_eq!(result, "line1\nline2\n... [output truncated to save context tokens] ...\nline5\n");
+    }
 }
+

@@ -10,6 +10,7 @@ pub mod search_web;
 pub mod shell;
 pub mod todo;
 pub mod write_file;
+pub mod use_skill;
 
 use std::path::{Path, PathBuf};
 
@@ -145,6 +146,7 @@ impl ToolRegistry {
             "fetch_url" => fetch_url::execute(args).await,
             "glob" => glob::execute(&self.cwd, args),
             "browser_debug" => browser_debug::execute(args).await,
+            "use_skill" => use_skill::execute(&self.cwd, args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -281,14 +283,35 @@ pub fn build_tool_schemas() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Execute a shell command. Will prompt for permission unless YOLO mode is on.",
+                "description": "Execute a shell command. PAGER=cat, EDITOR=true, and GIT_EDITOR=true are preset by default to prevent blocking interactive prompts.\n\n\
+                GUIDELINES TO PREVENT HANGS:\n\
+                - Always insert '--no-pager' immediately after 'git' for read-only commands (e.g. 'git --no-pager log -n 5').\n\
+                - Always prepend 'GIT_EDITOR=true ' to git commands that might invoke an editor (e.g. 'GIT_EDITOR=true git rebase').\n\
+                - Never run interactive commands or commands that run indefinitely (like dev servers, file watchers). Use non-interactive modes (e.g. -y).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": { "type": "string", "description": "Shell command to execute" },
-                        "timeout_secs": { "type": "integer", "description": "Timeout in seconds (default 30)" }
+                        "timeout_secs": { "type": "integer", "description": "Timeout in seconds (default 30)" },
+                        "head_lines": { "type": "integer", "description": "Optional limit: return only the first N lines of stdout to the LLM (TUI shows full output)" },
+                        "tail_lines": { "type": "integer", "description": "Optional limit: return only the last N lines of stdout to the LLM (TUI shows full output)" },
+                        "reason": { "type": "string", "description": "Explanation of why this command is being run (displayed to user if authorization is needed)" }
                     },
                     "required": ["command"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "use_skill",
+                "description": "Load the complete guidelines and best practices for a specialized skill by name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "The exact name of the skill to load (e.g. remotion-best-practices)" }
+                    },
+                    "required": ["name"]
                 }
             }
         }),
