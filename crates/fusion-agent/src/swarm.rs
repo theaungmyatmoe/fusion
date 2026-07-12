@@ -2,9 +2,16 @@
 //!
 //! Replaces the old synchronous `execute_delegate_write` with a full
 //! task orchestrator supporting single, parallel, and background modes.
+//!
+//! Rate-limit strategy when spawning (from reference/opencode, pi, codex,
+//! grok-cli):
+//! - Semaphore caps how many sub-agents run at once (`swarm_max_concurrency`)
+//! - Staggered starts avoid a thundering-herd of simultaneous first LLM calls
+//! - LLM client holds a process-wide request gate + Retry-After backoff
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
@@ -17,6 +24,12 @@ use fusion_llm::client::{create_llm_client, ChatMessage, ChatOptions, LlmClient}
 use crate::agent::AgentEvent;
 use crate::persona::{get_persona, Persona};
 use crate::tools::{build_tool_schemas_for_persona, ToolRegistry};
+
+/// Default max parallel sub-agents. Kept low so parent + children share the
+/// provider budget; the LLM client gate further limits in-flight HTTP calls.
+const DEFAULT_SWARM_MAX_CONCURRENCY: usize = 2;
+/// Delay between launching each parallel/background sub-agent.
+const DEFAULT_SPAWN_STAGGER_MS: u64 = 750;
 
 /// Result of a completed (or failed/timed-out) sub-agent task.
 #[derive(Debug, Clone)]
@@ -42,15 +55,30 @@ pub struct TaskSwarm {
     active_tasks: Arc<Mutex<HashMap<String, TaskHandle>>>,
     semaphore: Arc<Semaphore>,
     max_concurrency: usize,
+    /// Pause between spawning concurrent sub-agents to avoid burst 429s.
+    spawn_stagger: Duration,
 }
 
 impl TaskSwarm {
     pub fn new(max_concurrency: usize) -> Self {
+        Self::with_stagger(
+            max_concurrency,
+            Duration::from_millis(DEFAULT_SPAWN_STAGGER_MS),
+        )
+    }
+
+    pub fn with_stagger(max_concurrency: usize, spawn_stagger: Duration) -> Self {
+        let max_concurrency = max_concurrency.max(1);
         Self {
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             semaphore: Arc::new(Semaphore::new(max_concurrency)),
             max_concurrency,
+            spawn_stagger,
         }
+    }
+
+    pub fn default_max_concurrency() -> usize {
+        DEFAULT_SWARM_MAX_CONCURRENCY
     }
 
     /// Execute a `task` tool call. Dispatches to single, parallel, or background mode.
@@ -131,12 +159,14 @@ impl TaskSwarm {
         }
 
         let _ = tx.send(AgentEvent::TextDelta(format!(
-            "\n[Swarm] Spawning {} parallel sub-agents (concurrency: {})...\n",
+            "\n[Swarm] Spawning {} parallel sub-agents (concurrency: {}, stagger: {}ms)...\n",
             tasks.len(),
-            self.max_concurrency
+            self.max_concurrency,
+            self.spawn_stagger.as_millis()
         )));
 
         let mut handles = Vec::new();
+        let mut launched = 0usize;
 
         for (i, task_spec) in tasks.iter().enumerate() {
             let persona_name = task_spec
@@ -160,13 +190,24 @@ impl TaskSwarm {
                 }
             };
 
+            // Stagger launches so first LLM calls are not simultaneous.
+            if launched > 0 && !self.spawn_stagger.is_zero() {
+                tokio::time::sleep(self.spawn_stagger).await;
+            }
+            launched += 1;
+
             let config = config.clone();
             let cwd = cwd.to_string();
             let tx = tx.clone();
             let task_desc = task_desc.to_string();
             let semaphore = self.semaphore.clone();
+            // Per-agent offset keeps later rounds from re-syncing on the API.
+            let start_offset = self.spawn_stagger.mul_f32(0.25) * (launched as u32).saturating_sub(1);
 
             let handle = tokio::spawn(async move {
+                if !start_offset.is_zero() {
+                    tokio::time::sleep(start_offset).await;
+                }
                 let _permit = semaphore.acquire().await.unwrap();
                 run_sub_agent_standalone(&persona, &task_desc, None, &config, &cwd, tx).await
             });
@@ -545,6 +586,20 @@ pub async fn run_sub_agent_standalone(
         .unwrap_or(900)
         .max(1);
 
+    // Sub-agents inherit parent pacing when set; otherwise use a small default
+    // so concurrent children do not hammer the API between tool rounds.
+    let pacing_ms = config
+        .settings
+        .get("agent_pacing_ms")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            config
+                .settings
+                .get("subagent_pacing_ms")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or(200);
+
     let sub_result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
         run_agent_loop(
@@ -554,6 +609,7 @@ pub async fn run_sub_agent_standalone(
             &tool_schemas,
             max_rounds,
             max_tokens,
+            pacing_ms,
             &task_id,
             &tx,
         ),
@@ -621,10 +677,16 @@ async fn run_agent_loop(
     tool_schemas: &[serde_json::Value],
     max_rounds: usize,
     max_tokens: Option<u32>,
+    pacing_ms: u64,
     task_id: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<String, String> {
     for round in 0..max_rounds {
+        // Pace between rounds so concurrent sub-agents do not burst the API.
+        if round > 0 && pacing_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(pacing_ms)).await;
+        }
+
         // Nudge near end
         if round == max_rounds.saturating_sub(2) {
             messages.push(ChatMessage::system(
@@ -869,5 +931,18 @@ mod tests {
     fn test_swarm_creation() {
         let swarm = TaskSwarm::new(4);
         assert_eq!(swarm.max_concurrency, 4);
+        assert_eq!(swarm.spawn_stagger, Duration::from_millis(DEFAULT_SPAWN_STAGGER_MS));
+    }
+
+    #[test]
+    fn test_swarm_with_stagger() {
+        let swarm = TaskSwarm::with_stagger(2, Duration::from_millis(500));
+        assert_eq!(swarm.max_concurrency, 2);
+        assert_eq!(swarm.spawn_stagger, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_default_max_concurrency_is_conservative() {
+        assert!(TaskSwarm::default_max_concurrency() <= 2);
     }
 }

@@ -66,8 +66,19 @@ impl Agent {
             .or_else(|| std::env::var("KEENABLE_API_KEY").ok());
         let tool_registry = ToolRegistry::new(&cwd, None, keenable_api_key);
 
-        let max_concurrency =
-            setting_u64(config, "swarm_max_concurrency", 4).max(1) as usize;
+        // Cap concurrent sub-agents (default 2) so spawning does not trip provider limits.
+        let max_concurrency = setting_u64(
+            config,
+            "swarm_max_concurrency",
+            TaskSwarm::default_max_concurrency() as u64,
+        )
+        .max(1) as usize;
+        let spawn_stagger_ms = setting_u64(config, "swarm_spawn_stagger_ms", 750);
+
+        // Process-wide LLM HTTP concurrency (parent + all sub-agents).
+        // Must be configured before the first chat() call.
+        let llm_max_concurrent = setting_u64(config, "llm_max_concurrent", 2).max(1) as usize;
+        fusion_llm::client::configure_llm_max_concurrent(llm_max_concurrent);
 
         Self {
             config: config.clone(),
@@ -79,7 +90,10 @@ impl Agent {
             arbitrage_mode: true,
             max_rounds: setting_u64(config, "agent_max_rounds", 25).max(1) as usize,
             max_tokens: None,
-            swarm: TaskSwarm::new(max_concurrency),
+            swarm: TaskSwarm::with_stagger(
+                max_concurrency,
+                std::time::Duration::from_millis(spawn_stagger_ms),
+            ),
         }
     }
 
@@ -334,9 +348,9 @@ impl Agent {
             let max_rounds = self.max_rounds;
 
             for round in 0..max_rounds {
-                // Provider retries handle normal rate limits. Optional pacing remains available
-                // for unusually strict gateways without slowing every Cloudflare request by default.
-                let pacing_ms = setting_u64(&self.config, "agent_pacing_ms", 0);
+                // Light default pacing between rounds reduces burst 429s when tools
+                // fire rapidly; set agent_pacing_ms = 0 to disable.
+                let pacing_ms = setting_u64(&self.config, "agent_pacing_ms", 150);
                 if round > 0 && pacing_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(pacing_ms)).await;
                 }

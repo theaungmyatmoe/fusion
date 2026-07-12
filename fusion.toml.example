@@ -38,8 +38,14 @@ api_key = "YOUR_CLOUDFLARE_API_TOKEN"
 # Agent runtime tuning. Sub-agent responses stream through the same API event path
 # as the parent. Keep the child focused and bounded for fast failure recovery.
 # agent_max_rounds = 25
-# agent_pacing_ms = 0
+# agent_pacing_ms = 150          # delay between parent tool rounds (0 disables)
+# subagent_pacing_ms = 200       # delay between sub-agent tool rounds
 # subagent_max_rounds = 12
 # subagent_max_tokens = 16384
 # subagent_timeout_secs = 900
 # subagent_verify_timeout_secs = 120
+#
+# Swarm / rate-limit controls (prevents 429 when spawning sub-agents):
+# swarm_max_concurrency = 2     # max parallel sub-agents
+# swarm_spawn_stagger_ms = 750  # pause between launching each sub-agent
+# llm_max_concurrent = 2        # process-wide concurrent LLM HTTP requests

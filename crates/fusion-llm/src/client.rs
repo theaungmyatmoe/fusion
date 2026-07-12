@@ -261,7 +261,7 @@ impl LlmClient {
         &self,
         options: ChatOptions,
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<LlmEvent>>,
-    ) -> Result<ChatResult, FusionError> {
+    ) -> Result<ChatResult, AttemptError> {
         if self.config.provider == Provider::Faux {
             let mut lock = faux::get_faux_responses().lock().unwrap();
             if let Some(res) = lock.pop_front() {
@@ -278,11 +278,11 @@ impl LlmClient {
                         return Ok(chat_res);
                     }
                     Err(e) => {
-                        return Err(FusionError::Llm(e));
+                        return Err(AttemptError::fatal(e));
                     }
                 }
             } else {
-                return Err(FusionError::Llm("No faux responses queued".into()));
+                return Err(AttemptError::fatal("No faux responses queued"));
             }
         }
 
@@ -298,19 +298,17 @@ impl LlmClient {
 
         let (url, auth_header) = if is_cf {
             if account_id.is_empty() {
-                return Err(FusionError::Llm(
+                return Err(AttemptError::fatal(
                     "CLOUDFLARE_ACCOUNT_ID is required when using Cloudflare Workers AI.\n\
                      Tip: export CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN, or set them in fusion.toml \
-                     under [provider.cloudflare]."
-                        .into(),
+                     under [provider.cloudflare].",
                 ));
             }
             if api_key.is_empty() {
-                return Err(FusionError::Llm(
+                return Err(AttemptError::fatal(
                     "CLOUDFLARE_API_TOKEN is required for Cloudflare Workers AI.\n\
                      Tip: export CLOUDFLARE_API_TOKEN, or set api_key in fusion.toml \
-                     under [provider.cloudflare]."
-                        .into(),
+                     under [provider.cloudflare].",
                 ));
             }
             let url = format!(
@@ -364,21 +362,25 @@ impl LlmClient {
             let resp = request_builder
                 .send()
                 .await
-                .map_err(|e| FusionError::Llm(format!("Failed to send request: {}", e)))?;
+                .map_err(|e| AttemptError::from_transport(format!("Failed to send request: {}", e)))?;
 
             let status = resp.status();
             if !status.is_success() {
+                let retry_after = parse_retry_after_headers(resp.headers());
                 let body_text = resp.text().await.unwrap_or_default();
-                return Err(FusionError::Llm(format!(
-                    "API error (Status {}): {}",
-                    status, body_text
-                )));
+                return Err(AttemptError::from_http(
+                    status.as_u16(),
+                    body_text,
+                    retry_after,
+                ));
             }
 
             let response_json: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| FusionError::Llm(format!("Failed to parse JSON response: {}", e)))?;
+                .map_err(|e| {
+                    AttemptError::from_transport(format!("Failed to parse JSON response: {}", e))
+                })?;
 
             let mut accumulated_content = String::new();
             let mut accumulated_reasoning = String::new();
@@ -428,8 +430,9 @@ impl LlmClient {
             });
         }
 
-        let mut event_source = EventSource::new(request_builder)
-            .map_err(|e| FusionError::Llm(format!("Failed to connect to SSE stream: {}", e)))?;
+        let mut event_source = EventSource::new(request_builder).map_err(|e| {
+            AttemptError::from_transport(format!("Failed to connect to SSE stream: {}", e))
+        })?;
 
         let mut accumulated_content = String::new();
         let mut accumulated_reasoning = String::new();
@@ -510,14 +513,14 @@ impl LlmClient {
                 }
                 Err(e) => {
                     event_source.close();
-                    let err_msg = match e {
+                    return Err(match e {
                         reqwest_eventsource::Error::InvalidStatusCode(status, resp) => {
+                            let retry_after = parse_retry_after_headers(resp.headers());
                             let body = resp.text().await.unwrap_or_default();
-                            format!("Invalid status code {}: {}", status, body)
+                            AttemptError::from_http(status.as_u16(), body, retry_after)
                         }
-                        other => other.to_string(),
-                    };
-                    return Err(FusionError::Llm(format!("Stream error: {}", err_msg)));
+                        other => AttemptError::from_transport(format!("Stream error: {}", other)),
+                    });
                 }
             }
         }
@@ -559,18 +562,163 @@ impl LlmClient {
     }
 }
 
-fn is_retryable_error(message: &str) -> bool {
+/// Structured per-attempt failure used by the retry loop.
+struct AttemptError {
+    message: String,
+    retryable: bool,
+    is_rate_limit: bool,
+    retry_after: Option<Duration>,
+}
+
+impl AttemptError {
+    fn fatal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+            is_rate_limit: false,
+            retry_after: None,
+        }
+    }
+
+    fn from_http(status: u16, body: String, retry_after: Option<Duration>) -> Self {
+        let message = format!("API error (Status {}): {}", status, body);
+        let is_rate_limit = status == 429
+            || body.to_ascii_lowercase().contains("rate limit")
+            || body.to_ascii_lowercase().contains("too many requests");
+        let terminal = is_terminal_provider_limit(&body);
+        let retryable = !terminal
+            && (is_rate_limit
+                || matches!(status, 408 | 500 | 502 | 503 | 504 | 524)
+                || is_retryable_transport_message(&body));
+        Self {
+            message,
+            retryable,
+            is_rate_limit,
+            retry_after,
+        }
+    }
+
+    fn from_transport(message: impl Into<String>) -> Self {
+        let message = message.into();
+        let lower = message.to_ascii_lowercase();
+        let is_rate_limit = lower.contains("429")
+            || lower.contains("rate limit")
+            || lower.contains("too many requests");
+        let terminal = is_terminal_provider_limit(&message);
+        let retryable = !terminal
+            && (is_rate_limit
+                || is_retryable_transport_message(&message)
+                || lower.contains("408")
+                || lower.contains("500")
+                || lower.contains("502")
+                || lower.contains("503")
+                || lower.contains("504")
+                || lower.contains("524"));
+        Self {
+            message,
+            retryable,
+            is_rate_limit,
+            retry_after: None,
+        }
+    }
+}
+
+/// Hard account/quota limits should not be retried (from reference/pi).
+fn is_terminal_provider_limit(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
     [
-        "408",
-        "429",
-        "500",
-        "502",
-        "503",
-        "504",
-        "Too Many Requests",
+        "gousagelimiterror",
+        "freeusagelimiterror",
+        "monthly usage limit reached",
+        "available balance",
+        "insufficient_quota",
+        "out of budget",
+        "quota exceeded",
+        "billing",
     ]
     .iter()
-    .any(|status| message.contains(status))
+    .any(|p| lower.contains(p))
+}
+
+fn is_retryable_transport_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "overloaded",
+        "rate limit",
+        "too many requests",
+        "service unavailable",
+        "server error",
+        "internal error",
+        "connection refused",
+        "connection reset",
+        "connection error",
+        "network error",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "upstream connect",
+        "socket hang up",
+        "reset before headers",
+        "provider returned error",
+        "resourceexhausted",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
+}
+
+/// Parse `retry-after` / `retry-after-ms` (opencode + pi + grok-cli).
+fn parse_retry_after_headers(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    if let Some(val) = headers.get("retry-after-ms") {
+        if let Ok(s) = val.to_str() {
+            if let Ok(ms) = s.parse::<f64>() {
+                if ms.is_finite() && ms >= 0.0 {
+                    return Some(Duration::from_millis(ms as u64));
+                }
+            }
+        }
+    }
+
+    let retry_after = headers.get("retry-after")?.to_str().ok()?;
+    if let Ok(seconds) = retry_after.parse::<f64>() {
+        if seconds.is_finite() && seconds >= 0.0 {
+            return Some(Duration::from_millis((seconds * 1000.0).ceil() as u64));
+        }
+    }
+
+    // Absolute HTTP-date Retry-After values are uncommon for LLM APIs; seconds
+    // and retry-after-ms cover the providers we hit in practice.
+    None
+}
+
+/// Exponential backoff with light jitter (codex-style 0.9–1.1).
+/// Prefer provider Retry-After when present (especially for 429).
+fn retry_delay(attempt: u32, retry_after: Option<Duration>, is_rate_limit: bool) -> Duration {
+    if let Some(header_delay) = retry_after {
+        let cap = if is_rate_limit {
+            RETRY_MAX_DELAY_WITH_HEADERS
+        } else {
+            RETRY_MAX_DELAY_NO_HEADERS
+        };
+        return header_delay.min(cap).max(Duration::from_millis(100));
+    }
+
+    // attempt is 1-based (first retry => attempt 1)
+    let exp = 2u32.saturating_pow(attempt.saturating_sub(1).min(8));
+    let base_ms = RETRY_INITIAL_DELAY.as_millis() as u64;
+    let raw = base_ms.saturating_mul(exp as u64);
+    let capped = raw.min(RETRY_MAX_DELAY_NO_HEADERS.as_millis() as u64);
+    let jittered = apply_jitter_ms(capped);
+    Duration::from_millis(jittered.max(100))
+}
+
+fn apply_jitter_ms(ms: u64) -> u64 {
+    // 0.9–1.1 range without pulling in rand (codex uses the same band).
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let factor = 0.9 + (nanos % 200) as f64 / 1000.0;
+    ((ms as f64) * factor) as u64
 }
 
 #[derive(Default, Clone)]
@@ -1206,5 +1354,66 @@ mod tests {
         assert_eq!(chunk3, None); // Should buffer because it might match "Calling tool "
         let chunk4 = filter2.feed("with arguments: {\"a\": 1} Done.");
         assert_eq!(chunk4, Some(" Done.".to_string()));
+    }
+
+    #[test]
+    fn test_terminal_provider_limits_are_not_retryable() {
+        assert!(is_terminal_provider_limit("GoUsageLimitError"));
+        assert!(is_terminal_provider_limit("insufficient_quota"));
+        assert!(!is_terminal_provider_limit("Rate limit exceeded, retry later"));
+    }
+
+    #[test]
+    fn test_attempt_error_from_http_429_is_retryable() {
+        let err = AttemptError::from_http(429, "Too Many Requests".into(), Some(Duration::from_secs(3)));
+        assert!(err.retryable);
+        assert!(err.is_rate_limit);
+        assert_eq!(err.retry_after, Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn test_attempt_error_quota_is_not_retryable() {
+        let err = AttemptError::from_http(
+            429,
+            "GoUsageLimitError: Monthly usage limit reached".into(),
+            Some(Duration::from_secs(3600)),
+        );
+        assert!(!err.retryable);
+        assert!(err.is_rate_limit);
+    }
+
+    #[test]
+    fn test_retry_delay_prefers_retry_after_header() {
+        let delay = retry_delay(1, Some(Duration::from_secs(5)), true);
+        assert_eq!(delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_retry_delay_exponential_without_header() {
+        let d1 = retry_delay(1, None, true);
+        let d2 = retry_delay(2, None, true);
+        // Base ~2s with jitter 0.9–1.1, second attempt ~4s with jitter
+        assert!(d1.as_millis() >= 1800 && d1.as_millis() <= 2300);
+        assert!(d2.as_millis() >= 3600 && d2.as_millis() <= 4600);
+    }
+
+    #[test]
+    fn test_parse_retry_after_seconds() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", "7".parse().unwrap());
+        assert_eq!(
+            parse_retry_after_headers(&headers),
+            Some(Duration::from_secs(7))
+        );
+    }
+
+    #[test]
+    fn test_parse_retry_after_ms() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after-ms", "1500".parse().unwrap());
+        assert_eq!(
+            parse_retry_after_headers(&headers),
+            Some(Duration::from_millis(1500))
+        );
     }
 }

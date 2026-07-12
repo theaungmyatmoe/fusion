@@ -56,10 +56,14 @@ api_key = "xai-your-key"
 
 [settings]
 # Optional agent/delegation tuning
-agent_pacing_ms = 0
+agent_pacing_ms = 150
 subagent_max_rounds = 12
 subagent_timeout_secs = 900
 subagent_verify_timeout_secs = 120
+# Rate-limit protection when spawning sub-agents
+swarm_max_concurrency = 2
+swarm_spawn_stagger_ms = 750
+llm_max_concurrent = 2
 ```
 
 ### Environment Variables
