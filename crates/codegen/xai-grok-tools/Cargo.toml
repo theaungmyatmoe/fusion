@@ -42,7 +42,7 @@ minijinja = { version = "2", features = ["custom_syntax"] }
 parking_lot = { workspace = true }
 htmd = { workspace = true }
 scraper = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls", "json", "gzip", "brotli", "deflate"] }
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots", "json", "gzip", "brotli", "deflate"] }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }
@@ -106,7 +106,7 @@ wiremock = { workspace = true }
 xai-test-utils = { workspace = true }
 
 [build-dependencies]
-reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls-webpki-roots"] }
 flate2 = { workspace = true }
 tar = { workspace = true }
 

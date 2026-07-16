@@ -10,7 +10,7 @@ metrics = ["dep:prometheus"]
 
 [dependencies]
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
-tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 tokio-util = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
