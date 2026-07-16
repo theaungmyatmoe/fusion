@@ -26,3 +26,6 @@ Thumbs.db
 # TUI Local Pastes and Tool States
 image_*.png
 .antigravitycli/
+
+# Nested crate build outputs
+**/target/
