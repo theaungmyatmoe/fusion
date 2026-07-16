@@ -155,12 +155,6 @@ jobs:
 
             ### Install (Termux / Android)
             ```bash
-            # 1. Install CA certificates (required for SSL verification)
-            pkg install ca-certificates -y
-            export SSL_CERT_FILE=$PREFIX/etc/tls/cert.pem
-            echo "export SSL_CERT_FILE=\$PREFIX/etc/tls/cert.pem" >> ~/.bashrc
-
-            # 2. Download and install Fusion
             curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/fusion-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz | tar xz
             chmod +x fusion
             mv fusion $PREFIX/bin/fusion
