@@ -1,1 +1,0 @@
-/Users/aungmyatmoe/TheSpace/fusion/third_party/sqlite-vec/target/release/libsqlite_vec.rlib: /Users/aungmyatmoe/TheSpace/fusion/third_party/sqlite-vec/build.rs /Users/aungmyatmoe/TheSpace/fusion/third_party/sqlite-vec/src/lib.rs
