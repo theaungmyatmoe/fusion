@@ -1,142 +1,236 @@
 # Fusion
 
-Fusion is a terminal-based AI coding assistant inspired by OpenAI Codex CLI. It runs as a **single static binary** with no external dependencies.
+**Fusion** is a terminal-first AI coding agent — **made by Fusion AI**.
 
-| Desktop view | Mobile view |
+It runs as a **single binary** (`fusion`) with a full interactive TUI, headless mode for scripts/CI, tools, subagents, MCP, skills, and multi-provider models. Linux and Termux builds are **static musl** (copy → run, no system libc dance).
+
+| Desktop | Mobile (Termux) |
 |:---:|:---:|
-| ![Fusion Code TUI Interface](docs/screenshot.png) | ![Fusion Code Mobile Interface](docs/screenshot_mobile.png) |
+| ![Fusion TUI](docs/screenshot.png) | ![Fusion on Termux](docs/screenshot_mobile.png) |
+
+---
 
 ## Install
 
-To install Fusion on **macOS**, **Linux**, **Alpine Linux**, **Android (Termux)**, or **iOS (iSH / UTM VMs)**, run the following one-line command:
+One-liner (macOS, Linux, Alpine/iSH, Termux):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
 ```
 
-> **Note** — The installer automatically detects your platform, checks for and installs missing dependencies (like `git`, `ripgrep`, and `ca-certificates` on Alpine/iSH or Termux), downloads the optimized precompiled binary, and registers it. On iOS (iSH), Fusion automatically falls back to a lightweight REPL interface.
+The installer:
 
-### Android (Termux) — no npm
+1. Detects OS/arch  
+2. Downloads the matching **GitHub Release** asset  
+3. Installs `fusion` to `~/.local/bin` (macOS/Linux) or `$PREFIX/bin` (Termux)
 
-Fusion is a **single Rust binary**. You do **not** need Node/npm.
+### Release targets
+
+| Platform | Artifact triple | Linkage |
+|----------|-----------------|---------|
+| Linux x86_64 | `x86_64-unknown-linux-musl` | Static musl |
+| **Termux / Android ARM64** | `aarch64-unknown-linux-musl` | **Static musl** |
+| macOS Intel | `x86_64-apple-darwin` | Dynamic |
+| macOS Apple Silicon | `aarch64-apple-darwin` | Dynamic |
+
+Asset names look like:
+
+```text
+fusion-<tag>-aarch64-unknown-linux-musl.tar.gz
+```
+
+(Older releases may use unversioned names such as `fusion-aarch64-unknown-linux-musl.tar.gz` — the installer accepts both.)
+
+### Termux notes
 
 ```bash
-# Install prebuilt (recommended)
+# Install
 curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
 
-# Writable temp (Termux system /tmp is broken — Fusion fixes this automatically)
+# Prefer writable temp (Fusion also remaps /tmp when needed)
 export TMPDIR="$PREFIX/tmp"
 mkdir -p "$TMPDIR"
 
-fusion --simple   # best on phones
+# Lighter UI on phones
+fusion --minimal
 ```
 
-If an agent command still hits `Permission denied` on `/tmp`, update to the latest Fusion (shell remaps `/tmp` → `$PREFIX/tmp`).
+No Node/npm required. Prebuilt = static musl binary.
 
-### Android — Secure Alpine Sandbox (Optional)
-
-To isolate Fusion's shell execution in a secure Alpine container (protecting your phone's directories from agent commands):
+### Optional Alpine sandbox on Android
 
 ```bash
-# 1. Install & enter Alpine sandbox
 pkg install proot-distro
 proot-distro install alpine
 proot-distro login alpine
-
-# 2. Install Fusion inside sandbox
 curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
 ```
 
-### Build From Source
+---
+
+## Quick start
 
 ```bash
-git clone https://github.com/theaungmyatmoe/fusion.git
-cd fusion
-cargo build --release
+fusion login              # authenticate (provider-dependent)
+fusion                    # interactive TUI
+fusion --minimal          # scrollback-friendly / mobile UI
+fusion -p "fix the flaky test in auth.rs"   # headless one-shot
+fusion --yolo -p "…"      # auto-approve tool use (use carefully)
 ```
+
+Identity in the agent system prompt:
+
+> **You are Fusion made by Fusion AI.**
+
+Home directory (config, sessions, skills, logs):
+
+```text
+~/.fusion/          # default
+$FUSION_HOME/       # override (GROK_HOME still accepted for compatibility)
+```
+
+Main config file: **`~/.fusion/config.toml`**.
+
+Project rules / agent instructions: `AGENTS.md` (and compatible layouts) in the repo.
+
+---
 
 ## Configuration
 
-Create `fusion.toml` in your project directory or at `~/.config/fusion/fusion.toml`:
+### User config
 
-```toml
-model = "@cf/moonshotai/kimi-k2.7-code"
-yolo = false
-
-[provider]
-default = "cloudflare"
-
-[provider.cloudflare]
-account_id = "your_account_id"
-api_key = "your_api_token"
-
-[provider.xai]
-api_key = "xai-your-key"
-
-[settings]
-# Optional agent/delegation tuning
-# (defaults are provider-aware; Cloudflare uses stricter values)
-agent_pacing_ms = 150
-subagent_max_rounds = 12
-subagent_timeout_secs = 900
-subagent_verify_timeout_secs = 120
-# Rate-limit protection when spawning sub-agents
-swarm_max_concurrency = 2      # worker-pool size (true queue, not fire-all)
-swarm_spawn_stagger_ms = 750   # base start gap; multiplies under 429 pressure
-llm_max_concurrent = 2         # shared parent+child HTTP slots (live-updatable)
+```bash
+mkdir -p ~/.fusion
+$EDITOR ~/.fusion/config.toml
 ```
 
-### Environment Variables
+Example (shape varies by provider; see in-product docs under `~/.fusion/docs/user-guide/` after first run):
+
+```toml
+# Model id from the built-in catalog (defaults include Cloudflare Workers AI models)
+# model = "cloudflare-kimi-k2.7"
+
+[ui]
+# screen_mode = "minimal"   # prefer phone-friendly UI by default
+
+# API keys are usually set via `fusion login` or environment variables.
+```
+
+Legacy / project-level examples may still use `fusion.toml` or `~/.config/fusion/fusion.toml` for multi-provider setups — prefer **`~/.fusion/config.toml`** for the current binary.
+
+### Environment (common)
 
 | Variable | Description |
-|---|---|
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token |
-| `XAI_API_KEY` | xAI / Grok API key |
-| `FUSION_MODEL` | Override model ID |
-| `FUSION_YOLO=1` | Enable auto-approve mode |
+|----------|-------------|
+| `FUSION_HOME` | Override config/data directory (default `~/.fusion`) |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | Cloudflare Workers AI |
+| `XAI_API_KEY` | xAI API access |
+| `OPENAI_API_KEY` | OpenAI-compatible providers |
+| `PROTOC` | Path to `protoc` when building from source |
+
+Default model catalog includes Cloudflare-hosted models (e.g. Kimi K2.7 Code). Bring your own keys.
+
+---
 
 ## Usage
 
 ```bash
-fusion                    # Launch Ratatui TUI (default)
-fusion --simple           # Launch lightweight scrollback REPL
-fusion -p "your task"     # Execute task headless
-fusion --model grok-3     # Override model
-fusion --yolo             # Auto-approve all shell executions
-fusion --tasks            # List background tasks and sub-agent sessions
-fusion --resume-task <id> # Resume a sub-agent task session by ID
-fusion --upgrade          # Self-upgrade to the latest version
+fusion                         # TUI
+fusion --minimal               # minimal / scrollback mode
+fusion --fullscreen            # force full TUI
+fusion -p "task"               # headless; print answer to stdout
+fusion --prompt-file task.md   # headless from file
+fusion -m cloudflare-kimi-k2.7 # model override
+fusion --yolo                  # always-approve tools (alias: --always-approve)
+fusion login                   # sign in / credentials
+fusion logout
+fusion --version
 ```
 
-### Chat Commands
+Useful interactive flows (slash commands and keybindings are documented in the bundled user guide):
 
-| Command | Description |
-|---|---|
-| `/help` | List commands |
-| `/plan` | Enter plan / thinking mode |
-| `/yolo` | Toggle auto-approve mode |
-| `/model <name>` | Switch LLM model |
-| `/status` | View current settings |
-| `/exit` | Quit |
+| Area | Examples |
+|------|----------|
+| Slash commands | `/model`, `/help`, plan/mode toggles, MCP/plugins where enabled |
+| Headless / CI | `fusion -p "…"`, JSON output formats via headless flags |
+| Subagents / tools | Built into the agent runtime (read, edit, shell, search, MCP, …) |
 
-### TUI Keymaps
+```bash
+# See full CLI surface
+fusion --help
+fusion agent --help
+```
 
-| Key | Action |
-|---|---|
-| `Tab` | Toggle between **Normal** (`Enter:send`) and **Plan** (`Enter:plan`) modes |
-| `Shift+Tab` | Cycle through all modes: **Normal → Plan → YOLO** |
-| `Cmd+V` / `Ctrl+V` | Paste text from clipboard |
-| `Ctrl+G` | Save and attach clipboard image (saved as `.png`, rendered as `[Image #N]`) |
-| `Ctrl+E` | Open `$EDITOR` to compose input in a full-screen editor |
-| `Up` / `Down` | Cycle through input history |
-| `Backspace` | Atomically delete inline tag placeholders (e.g. `[Image #1]`) |
+---
+
+## Build from source
+
+Requirements:
+
+- **Rust 1.92+** (see `rust-toolchain.toml`)
+- **`protoc`** (protobuf compiler) on `PATH`  
+  CI and local builds need a real protoc — the repo’s `bin/protoc` is a DotSlash wrapper and needs `dotslash` if you use it.
+
+```bash
+git clone https://github.com/theaungmyatmoe/fusion.git
+cd fusion
+
+# Install protoc if needed (examples)
+#   macOS:  brew install protobuf
+#   Debian: sudo apt install protobuf-compiler
+
+cargo build --release -p xai-grok-pager-bin
+# binary: target/release/fusion
+```
+
+Cross static Linux / Termux (needs musl toolchain):
+
+```bash
+./scripts/build-linux.sh          # both
+./scripts/build-linux.sh arm64    # aarch64-unknown-linux-musl (Termux)
+./scripts/build-linux.sh x86_64
+```
+
+Makefile shortcuts: `make build`, `make release`, `make termux`, `make dist`.
+
+---
+
+## Architecture (high level)
+
+The product binary is **`fusion`** (`crates/codegen/xai-grok-pager-bin`). Under the hood this is a large Rust workspace:
+
+```text
+crates/
+  codegen/     # agent, tools, TUI (pager), shell, MCP, config, update, …
+  common/      # shared tool protocol, tracing, compaction, …
+  build/       # protoc helpers
+third_party/   # vendored layout / mermaid bits
+```
+
+Internal crate names may still say `xai-grok-*` (historical). **User-facing product identity is Fusion / Fusion AI.**
+
+---
+
+## Releases & CI
+
+- **CI** (on `main`): build + unit tests + musl check — installs `protoc`, builds `-p xai-grok-pager-bin`
+- **Release**: push a version tag `v*` → multi-target binaries + GitHub Release notes
+
+```bash
+git tag -a v0.2.0 -m "Fusion monorepo + Fusion AI identity"
+git push origin v0.2.0
+```
+
+---
 
 ## Roadmap
 
-Long-term plan (phases, milestones, architecture rules): **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+Product plan and milestones: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+
+Related: [OpenClaw integration](docs/openclaw-integration.md).
+
+---
 
 ## License
 
-MIT
-
+MIT OR Apache-2.0 (see workspace `Cargo.toml` / `LICENSE`).
