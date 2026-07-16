@@ -32,7 +32,7 @@ pub fn init_sqlite_vec() {
         // sqlite3_auto_extension. The explicit type annotation on transmute makes
         // this compiler-verified — if sqlite-vec changes its init signature, the
         // annotation will cause a compile error instead of silent UB.
-        // We pin sqlite-vec to exact version =0.1.10-alpha.4; any bump must re-verify.
+        // Vendored sqlite-vec (third_party/sqlite-vec, based on 0.1.7-alpha.2 + musl fix).
         unsafe {
             rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
                 *const (),

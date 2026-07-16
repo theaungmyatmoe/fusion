@@ -1,0 +1,19 @@
+[package]
+name = "sqlite-vec"
+version = "0.1.7-alpha.2"
+edition = "2021"
+authors = ["Alex Garcia <alexsebastian.garcia@gmail.com>"]
+description = "FFI bindings to the sqlite-vec SQLite extension (Fusion-vendored, musl-fixed)"
+license = "MIT OR Apache-2.0"
+build = "build.rs"
+publish = false
+
+# Keep this crate out of the root workspace (used only via [patch.crates-io]).
+[workspace]
+
+[lib]
+name = "sqlite_vec"
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1.0"
