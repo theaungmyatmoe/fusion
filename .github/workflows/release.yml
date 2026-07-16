@@ -15,13 +15,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── Linux (static musl) ────────────────────────────────────────────
+          # ── Linux static musl (use cross — host musl-gcc breaks sqlite-vec) ─
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             binary: fusion
-            cross: false
+            cross: true
 
-          # Termux / Android ARM64 — cross-compiled
+          # Termux / Android ARM64 — static musl via cross
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             binary: fusion
@@ -59,12 +59,9 @@ jobs:
           toolchain: "1.92.0"
           targets: ${{ matrix.target }}
 
-      # ── Linux x86_64 musl (native, just needs musl-tools) ─────────────────
-      - name: Install musl tools (Linux x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      # ── Cross-compile (aarch64 musl / Android) ───────────────────────────
+      # ── musl targets: hermetic toolchain via cross (Docker) ──────────────
+      # Host `musl-tools` / x86_64-linux-musl-gcc fails compiling sqlite-vec
+      # (BSD u_int*_t vs musl stdint). cross images avoid that mismatch.
       - name: Install cross
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross --locked

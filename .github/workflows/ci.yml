@@ -62,7 +62,8 @@ jobs:
         run: |
           cargo test -p xai-grok-agent -p xai-grok-models -p xai-grok-config --lib -- --test-threads=2
 
-  # ── Linux static build (main only — release already covers this on tags) ───
+  # ── Linux static build (main only — release covers all platforms on tags) ─
+  # Host musl-gcc fails on sqlite-vec; use cross's Docker musl image instead.
   linux-musl:
     name: Linux musl static build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -83,8 +84,8 @@ jobs:
           toolchain: "1.92.0"
           targets: x86_64-unknown-linux-musl
 
-      - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -92,12 +93,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin
             target
-          key: ubuntu-musl-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-musl-cross-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build static binary
+      - name: Build static binary (cross)
         run: |
-          cargo build \
+          cross build \
             --release \
             --target x86_64-unknown-linux-musl \
             -p xai-grok-pager-bin
