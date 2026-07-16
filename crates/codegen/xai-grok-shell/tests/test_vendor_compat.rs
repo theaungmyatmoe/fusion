@@ -1,7 +1,7 @@
 //! Vendor-compatibility end-to-end tests.
 //!
 //! Each test builds a fake `$HOME` containing skills/rules/AGENTS.md under the
-//! `.grok`, `.cursor`, and `.claude` vendor dirs, spawns a real `grok agent
+//! `.grok`, `.cursor`, and `.claude` vendor dirs, spawns a real `fusion agent
 //! stdio` process against the mock inference server (toggling the
 //! `GROK_<VENDOR>_<SURFACE>_ENABLED` env vars via `cmd.env`), sends one prompt,
 //! and asserts on the full inference request bodies:

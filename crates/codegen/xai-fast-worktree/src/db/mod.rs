@@ -201,7 +201,7 @@ impl WorktreeDb {
         })
     }
 
-    /// Open the default DB at `~/.grok/worktrees.db`.
+    /// Open the default DB at `~/.fusion/worktrees.db`.
     ///
     /// Discovers grok home via `$GROK_HOME`, falling back to the canonicalized
     /// `$HOME/.grok` (matching `xai_grok_config::grok_home`).

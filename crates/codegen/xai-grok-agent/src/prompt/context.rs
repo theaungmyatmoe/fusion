@@ -427,9 +427,9 @@ mod tests {
     #[test]
     fn test_placeholders_system_prompt_label_override() {
         let mut ctx = test_context();
-        ctx.system_prompt_label = "Grok Internal".into();
+        ctx.system_prompt_label = "Fusion Internal".into();
         let p = ctx.placeholders();
-        assert_eq!(p["system_prompt_label"], "Grok Internal");
+        assert_eq!(p["system_prompt_label"], "Fusion Internal");
     }
     #[test]
     fn test_missing_system_prompt_label_deserializes_to_default() {
@@ -1229,7 +1229,7 @@ mod tests {
             ("plan", plan),
         ] {
             assert!(
-                !prompt.contains("You are a Grok Build agent"),
+                !prompt.contains("You are a Fusion agent"),
                 "{name} prompt should not duplicate base template identity"
             );
         }

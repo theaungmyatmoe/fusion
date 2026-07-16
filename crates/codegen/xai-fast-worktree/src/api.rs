@@ -703,7 +703,7 @@ pub struct CleanupReport {
 /// Remove all worktrees under a directory.
 ///
 /// Scans the given directory for subdirectories (one or two levels deep to
-/// handle `~/.grok/worktrees/<repo>/<session>/`) and calls `remove_worktree()`
+/// handle `~/.fusion/worktrees/<repo>/<session>/`) and calls `remove_worktree()`
 /// on each. Useful during session teardown to clean up all session worktrees.
 ///
 /// This is a **blocking** operation.
@@ -2071,7 +2071,7 @@ mod tests {
         std::fs::write(repo_path.join("file.txt"), "content").unwrap();
         git_commit_all(&repo_path, "initial");
 
-        // Create ~/.grok/worktrees/<repo>/<session>/ structure.
+        // Create ~/.fusion/worktrees/<repo>/<session>/ structure.
         let worktrees_dir = tmp.path().join("worktrees");
         let repo_group = worktrees_dir.join("myrepo");
         std::fs::create_dir_all(&repo_group).unwrap();
@@ -2116,7 +2116,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_cleanup_worktrees_in_removes_nested_dangling_symlink() {
-        // Dangling symlink one level deeper (~/.grok/worktrees/<repo>/<session>):
+        // Dangling symlink one level deeper (~/.fusion/worktrees/<repo>/<session>):
         // the nested branch must also unlink it rather than skip it.
         let tmp = tempfile::TempDir::new().unwrap();
         let worktrees_dir = tmp.path().join("worktrees");

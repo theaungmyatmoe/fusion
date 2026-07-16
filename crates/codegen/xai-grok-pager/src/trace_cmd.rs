@@ -427,7 +427,7 @@ async fn run_upload(
                 "trace_cmd: no upload credentials available"
             );
             anyhow::bail!(
-                "No upload credentials. Run `grok login` or set a deployment key. \
+                "No upload credentials. Run `fusion login` or set a deployment key. \
                  See {} for upload overrides.",
                 crate::util::display_user_grok_path("docs/user-guide")
             );
@@ -577,7 +577,7 @@ impl UploadAttempt<'_> {
         let _ = writeln!(log, "Trace upload debug log");
         let _ = writeln!(log, "======================");
         let _ = writeln!(log, "Timestamp:    {}", chrono::Utc::now().to_rfc3339());
-        let _ = writeln!(log, "Grok version: {}", env!("VERSION_WITH_COMMIT"));
+        let _ = writeln!(log, "Fusion version: {}", env!("VERSION_WITH_COMMIT"));
         let _ = writeln!(
             log,
             "OS:           {} {}",

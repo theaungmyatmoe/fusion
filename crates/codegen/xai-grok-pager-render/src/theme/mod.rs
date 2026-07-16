@@ -139,12 +139,12 @@ pub fn canonical_name(value: &str) -> Option<&'static str> {
 }
 
 /// Human-friendly display name for a canonical theme value (e.g.
-/// `"groknight"` → `"Grok Night"`). Falls back to `value` verbatim.
+/// `"groknight"` → `"Fusion Night"`). Falls back to `value` verbatim.
 pub fn display_name_for_canonical(value: &str) -> &str {
     match value {
         "auto" => "Auto",
-        "groknight" => "Grok Night",
-        "grokday" => "Grok Day",
+        "groknight" => "Fusion Night",
+        "grokday" => "Fusion Day",
         "tokyonight" => "Tokyo Night",
         "rosepine-moon" => "Rose Pine Moon",
         other => other,
@@ -254,7 +254,7 @@ impl Theme {
 
     /// Get the current theme, quantized to the terminal's color level.
     ///
-    /// Reads the active theme kind (loaded from `~/.grok/config.toml` on
+    /// Reads the active theme kind (loaded from `~/.fusion/config.toml` on
     /// first call, then cached in memory), builds the theme from its
     /// `const fn` constructor, and quantizes to the terminal's color level.
     ///

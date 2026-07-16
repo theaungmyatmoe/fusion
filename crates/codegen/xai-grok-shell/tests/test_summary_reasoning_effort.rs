@@ -5,7 +5,7 @@
 //! creation — not only after an explicit model/effort switch (the old
 //! behavior, which left the field absent for sessions that never switched).
 //!
-//! Each test spawns a real `grok agent stdio` process against a mock
+//! Each test spawns a real `fusion agent stdio` process against a mock
 //! inference server and asserts on the persisted `summary.json`.
 //!
 //! Run locally:

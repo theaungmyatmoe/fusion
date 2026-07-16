@@ -70,9 +70,9 @@ fn new_filtered_debouncer<F: notify_debouncer_mini::DebounceEventHandler>(
 pub enum ConfigChangeEvent {
     AuthChanged,
     GlobalConfigChanged,
-    /// `~/.grok/models_cache.json` changed — the on-disk `/v1/models`
+    /// `~/.fusion/models_cache.json` changed — the on-disk `/v1/models`
     /// catalog cache was rewritten, possibly by **another** grok process
-    /// sharing the same `~/.grok` (the writer may also be this process;
+    /// sharing the same `~/.fusion` (the writer may also be this process;
     /// the [`ModelsManager`](crate::agent::models::ModelsManager) dedupes
     /// by content before applying).
     ModelsCacheChanged,
@@ -98,7 +98,7 @@ pub enum ConfigChangeEvent {
     HomeClaudeJsonChanged,
 }
 
-/// Watches `~/.grok/` for `auth.json`, `config.toml`, and `models_cache.json`
+/// Watches `~/.fusion/` for `auth.json`, `config.toml`, and `models_cache.json`
 /// changes, plus any extra paths (project `.grok/config.toml`, `.mcp.json`,
 /// etc.) provided at startup.
 ///
@@ -112,7 +112,7 @@ pub enum ConfigChangeEvent {
 /// comparison) skips the update when nothing actually changed, so the
 /// redundant read is harmless. This avoids a class of bugs where an
 /// optimistic suppression window accidentally swallows writes from external
-/// processes (e.g. `grok login` in another terminal).
+/// processes (e.g. `fusion login` in another terminal).
 ///
 /// Adds two **non-recursive** watches per `cwd` argument:
 /// `<cwd>/` (catches `.mcp.json` and `.claude.json` at the project root) and
@@ -399,7 +399,7 @@ fn log_watch_error(err: &notify::Error, msg: &str) {
     }
 }
 
-/// Watches skill directories (`~/.grok/skills/`, `<repo>/.grok/skills/`, etc.)
+/// Watches skill directories (`~/.fusion/skills/`, `<repo>/.grok/skills/`, etc.)
 /// for new, modified, or removed `SKILL.md` files.
 ///
 /// When a change is detected the receiver gets a `()` signal. The caller is
@@ -423,10 +423,10 @@ fn is_skill_change_path(p: &Path) -> bool {
 }
 
 /// True for a global/home-level config dir that must never be watched
-/// recursively: `grok_home` (`~/.grok`, or `$GROK_HOME`) or a known vendor dir
+/// recursively: `grok_home` (`~/.fusion`, or `$GROK_HOME`) or a known vendor dir
 /// directly under `$HOME` ([`HOME_VENDOR_DIRS`]).
 ///
-/// These hold large non-skill trees — `~/.grok` alone has `worktrees/`,
+/// These hold large non-skill trees — `~/.fusion` alone has `worktrees/`,
 /// `sessions/`, `logs/`, `upload_queue/` — so recursing them exhausted the
 /// inotify quota (~780k watches on a devbox) and, since each worktree is a full
 /// checkout, fired skill reloads on ordinary repo activity. They get scoped
@@ -463,7 +463,7 @@ fn is_global_config_dir_impl(dir: &Path, grok_home: &Path, home: Option<&Path>) 
 /// Watch only a config dir's skill subtrees — `<dir>/skills` recursively and
 /// `<dir>/commands` flat — never the dir root (see [`is_global_config_dir`]).
 /// Returns the number of watches registered; a missing subdir is skipped (for
-/// `~/.grok` these exist at startup; later creation is caught on restart).
+/// `~/.fusion` these exist at startup; later creation is caught on restart).
 fn watch_skill_subdirs(
     debouncer: &mut Debouncer<AccessFilteredWatcher>,
     config_dir: &Path,
@@ -589,8 +589,8 @@ mod tests {
         assert!(!g(&home.join("repo").join(".grok")));
     }
 
-    /// Regression for the ~/.grok inotify-exhaustion / worktree-noise bug: a
-    /// `SKILL.md` under a sibling subtree (e.g. `~/.grok/worktrees/`) must not
+    /// Regression for the ~/.fusion inotify-exhaustion / worktree-noise bug: a
+    /// `SKILL.md` under a sibling subtree (e.g. `~/.fusion/worktrees/`) must not
     /// drive a reload, while a real `<dir>/skills/**/SKILL.md` change still does.
     #[test]
     #[cfg(target_os = "linux")]

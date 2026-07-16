@@ -11,7 +11,7 @@
   },
   {
     "category": "fixes",
-    "description": "**Ctrl+C** now cancels a blocking `grok update` cleanly instead of leaving an orphaned download repainting the terminal.",
+    "description": "**Ctrl+C** now cancels a blocking `fusion update` cleanly instead of leaving an orphaned download repainting the terminal.",
     "breaking_change": false
   }
 ]

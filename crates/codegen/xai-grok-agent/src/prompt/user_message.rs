@@ -5,7 +5,7 @@
 //! workspace overview, optional rules / skills / MCP listings).
 //!
 //! `UserMessageTemplate` selects the rendering strategy:
-//! - `Default` -- the legacy Grok Build prefix (built by the shell layer).
+//! - `Default` -- the legacy Fusion prefix (built by the shell layer).
 //! - `Custom`  -- caller-supplied template string (MiniJinja, same delimiters
 //!   as the system prompt templates).
 //!
@@ -63,7 +63,7 @@ fn normalize_git_status(status: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum UserMessageTemplate {
-    /// Legacy Grok Build prefix: `<user_info>` + optional `<git_status>`.
+    /// Legacy Fusion prefix: `<user_info>` + optional `<git_status>`.
     /// Built directly by the shell layer; this
     ///   renderer returns `None` for `Default` and the caller falls back to
     ///   its own legacy path.
@@ -185,7 +185,7 @@ pub struct UserMessageContext {
     pub terminals_folder: Option<PathBuf>,
     /// Workspace-scoped rule files (cwd / repo root / optional workspace user dir).
     pub workspace_rules: Vec<RuleEntry>,
-    /// User-scoped rule files (~/.grok/, ~/.claude/).
+    /// User-scoped rule files (~/.fusion/, ~/.claude/).
     pub user_rules: Vec<RuleEntry>,
     /// Skill registry snapshot (already deduped). Rendered through the
     /// shared budget-tier renderer.
@@ -196,7 +196,7 @@ pub struct UserMessageContext {
     /// Connected MCP servers (alphabetical).
     pub mcp_servers: Vec<McpServerEntry>,
     /// Absolute path to the per-workspace MCP descriptor root
-    /// (`~/.grok/projects/<encoded-cwd>/mcps`). Surfaced in
+    /// (`~/.fusion/projects/<encoded-cwd>/mcps`). Surfaced in
     /// the `<mcp_file_system>` instructions so the model knows where
     /// to discover tool/resource schemas. Required when `mcp_servers` is
     /// non-empty; ignored otherwise.

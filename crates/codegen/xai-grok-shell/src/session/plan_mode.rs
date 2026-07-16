@@ -75,7 +75,7 @@ pub struct PlanModeTracker {
     pending_activation: Option<PendingActivation>,
     /// Absolute path to the plan file on disk.
     /// Lives inside the session directory:
-    /// `~/.grok/sessions/<cwd>/<session_id>/plan.md`
+    /// `~/.fusion/sessions/<cwd>/<session_id>/plan.md`
     plan_file_path: PathBuf,
 }
 /// A buffered mid-turn activation reminder plus the state needed to roll the
@@ -106,7 +106,7 @@ pub struct PlanModeSnapshot {
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
-    /// directory (e.g., `~/.grok/sessions/<encoded-cwd>/<session-id>/`).
+    /// directory (e.g., `~/.fusion/sessions/<encoded-cwd>/<session-id>/`).
     pub fn new(session_dir: PathBuf) -> Self {
         Self {
             state: PlanModeState::Inactive,
@@ -644,7 +644,7 @@ mod tests {
     use std::collections::HashMap;
     use xai_grok_tools::types::template_renderer::TemplateRenderer;
     use xai_grok_tools::types::tool::ToolKind;
-    /// Build a test TemplateRenderer with standard Grok Build tool mappings.
+    /// Build a test TemplateRenderer with standard Fusion tool mappings.
     fn test_renderer() -> TemplateRenderer {
         let tools: HashMap<ToolKind, String> = [
             (ToolKind::Edit, "search_replace".to_owned()),

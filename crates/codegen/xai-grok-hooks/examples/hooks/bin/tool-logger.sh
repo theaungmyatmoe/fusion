@@ -2,7 +2,7 @@
 # tool-logger.sh — log tool calls to a local activity file
 #
 # Reads the hook envelope from stdin and appends a one-line JSON entry
-# to ~/.grok/tool-activity.log with event name, tool name, and timestamp.
+# to ~/.fusion/tool-activity.log with event name, tool name, and timestamp.
 # `toolName` is the resolved tool (e.g. `linear__save_issue` for MCP calls).
 
 INPUT=$(cat)

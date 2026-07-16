@@ -3,7 +3,7 @@ license = "Apache-2.0"
 name = "xai-grok-compaction"
 version = "0.1.0"
 edition.workspace = true
-description = "Shared, transport-agnostic compaction engine for Grok chat and Grok Build."
+description = "Shared, transport-agnostic compaction engine for Grok chat and Fusion."
 
 [dependencies]
 anyhow = { workspace = true }

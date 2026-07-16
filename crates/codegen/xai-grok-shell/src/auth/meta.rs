@@ -34,7 +34,7 @@ pub struct AuthMeta {
     #[serde(default)]
     pub gate: Option<GateInfo>,
     /// User-friendly display name for the current subscription tier
-    /// (e.g. "SuperGrok Heavy", "X Premium", "Free"). From CCP `/settings`.
+    /// (e.g. "Fusion Heavy", "X Premium", "Free"). From CCP `/settings`.
     #[serde(default)]
     pub subscription_tier: Option<String>,
 }

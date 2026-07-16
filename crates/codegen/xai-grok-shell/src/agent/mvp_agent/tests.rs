@@ -98,8 +98,8 @@ fn jwt_claim_matches_user_subscription_tier_known_pairs() {
         ("x_basic", "XBasic"),
         ("x_premium", "XPremium"),
         ("x_premium_plus", "XPremiumPlus"),
-        ("supergrok_heavy", "SuperGrokPro"),
-        ("supergrok_lite", "SuperGrokLite"),
+        ("supergrok_heavy", "FusionPro"),
+        ("supergrok_lite", "FusionLite"),
     ];
     for (claim, user_tier) in cases {
         assert!(
@@ -112,11 +112,11 @@ fn jwt_claim_matches_user_subscription_tier_known_pairs() {
 fn jwt_claim_matches_user_subscription_tier_rejects_stale_and_unknown() {
     assert!(!jwt_claim_matches_user_subscription_tier(
         "x_basic",
-        "SuperGrokPro"
+        "FusionPro"
     ));
     assert!(!jwt_claim_matches_user_subscription_tier(
         "supergrok",
-        "SuperGrokPro"
+        "FusionPro"
     ));
     assert!(!jwt_claim_matches_user_subscription_tier("free", "GrokPro"));
     assert!(!jwt_claim_matches_user_subscription_tier("", "XPremium"));

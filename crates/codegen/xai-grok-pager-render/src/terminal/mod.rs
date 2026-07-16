@@ -988,7 +988,7 @@ fn terminal_name_from_term_program(value: &str) -> Option<TerminalName> {
 
 /// User-configured alt-screen (fullscreen) mode.
 ///
-/// Parsed from `[terminal] alt_screen` in `~/.grok/pager.toml` and
+/// Parsed from `[terminal] alt_screen` in `~/.fusion/pager.toml` and
 /// overridden by the `--no-alt-screen` CLI flag.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AltScreenMode {

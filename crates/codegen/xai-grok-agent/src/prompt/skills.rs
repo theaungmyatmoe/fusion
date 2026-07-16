@@ -49,10 +49,10 @@ pub struct SkillsConfig {
 /// List all discovered skills with their metadata.
 ///
 /// Priority order: Local (cwd/.grok/skills, cwd/.agents/skills, cwd/.claude/skills) → Intermediate dirs →
-/// Repo (repo_root/.grok/skills, repo_root/.agents/skills, repo_root/.claude/skills) → User (~/.grok/skills, ~/.agents/skills, ~/.claude/skills)
+/// Repo (repo_root/.grok/skills, repo_root/.agents/skills, repo_root/.claude/skills) → User (~/.fusion/skills, ~/.agents/skills, ~/.claude/skills)
 /// → additional paths from `config.paths`
 /// → Server (injected `config.server_skill_dirs`)
-/// → Bundled (injected `config.bundled_skill_dirs` + `~/.grok/bundled`; lowest precedence).
+/// → Bundled (injected `config.bundled_skill_dirs` + `~/.fusion/bundled`; lowest precedence).
 ///
 /// `config.ignore` globs are applied across all sources after collection.
 /// Skills with the same name from higher-priority sources override lower-priority ones.
@@ -232,7 +232,7 @@ pub fn collect_skill_config_dirs(
 /// Determine the skill scope for a config directory based on its location
 /// relative to `cwd`, `git_root`, and the user's home directory.
 fn scope_for_config_dir(dir: &Path, cwd: Option<&Path>, git_root: Option<&Path>) -> SkillScope {
-    // Home-level dirs (e.g. ~/.grok/, ~/.agents/, ~/.claude/) are User scope.
+    // Home-level dirs (e.g. ~/.fusion/, ~/.agents/, ~/.claude/) are User scope.
     #[allow(deprecated)]
     if let Some(home) = std::env::home_dir()
         && dir.parent() == Some(home.as_path())
@@ -2627,7 +2627,7 @@ mod tests {
     #[test]
     fn dedupe_same_scope_same_basename_still_drops() {
         // Same name AND same dir basename across two same-scope roots
-        // (e.g. ~/.grok/skills and ~/.agents/skills): first-seen wins.
+        // (e.g. ~/.fusion/skills and ~/.agents/skills): first-seen wins.
         let out = dedupe_skills(vec![
             named_skill(
                 "japandi",

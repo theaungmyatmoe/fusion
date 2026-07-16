@@ -1,6 +1,6 @@
 # Hooks & Plugins Guide
 
-Grok Build supports **hooks** (event-driven shell commands) and **plugins** (bundles of skills, agents, hooks, and MCP servers). Both are managed through a unified modal interface.
+Fusion supports **hooks** (event-driven shell commands) and **plugins** (bundles of skills, agents, hooks, and MCP servers). Both are managed through a unified modal interface.
 
 ## Opening the Modal
 
@@ -21,7 +21,7 @@ The modal has three tabs: **Hooks**, **Plugins**, and **Marketplace**. Switch be
 Hooks are shell commands (or HTTP calls) that run automatically on events like `session_start`, `post_tool_use`, `notification`, etc. See [Creating Custom Hooks](custom-hooks.md) for how to write your own.
 
 Hooks are grouped by source:
-- **Global hooks** — from `~/.grok/hooks/`
+- **Global hooks** — from `~/.fusion/hooks/`
 - **Project hooks** — from `.grok/hooks/` in your repo
 - **Plugin hooks** — bundled with installed plugins
 - **Custom hooks** — added manually via a path
@@ -78,7 +78,7 @@ Browse and install plugins from configured marketplace sources.
 
 Sources are loaded from:
 1. **config.toml** — `[[marketplace.sources]]` entries
-2. **settings.json** — `extraKnownMarketplaces` from `~/.grok/settings.json` or `~/.claude/settings.json`
+2. **settings.json** — `extraKnownMarketplaces` from `~/.fusion/settings.json` or `~/.claude/settings.json`
 
 Each source shows its plugins with:
 - **Name** and **version**
@@ -98,12 +98,12 @@ Each source shows its plugins with:
 
 ### Adding Marketplace Sources
 
-Press `a` on the Marketplace tab (or run `grok plugin marketplace add <source>`)
+Press `a` on the Marketplace tab (or run `fusion plugin marketplace add <source>`)
 with a git URL, a GitHub shorthand (`owner/repo`), or a local directory path
 (`/absolute`, `~/dir`, or `./relative`). Local paths are stored as `path`
 sources — handy for developing a marketplace from an existing checkout.
 
-Sources land in `~/.grok/config.toml`:
+Sources land in `~/.fusion/config.toml`:
 
 ```toml
 [[marketplace.sources]]
@@ -115,7 +115,7 @@ name = "Local Dev"
 path = "~/dev/my-plugins"
 ```
 
-Or in `~/.grok/settings.json` / `~/.claude/settings.json`:
+Or in `~/.fusion/settings.json` / `~/.claude/settings.json`:
 
 ```json
 {

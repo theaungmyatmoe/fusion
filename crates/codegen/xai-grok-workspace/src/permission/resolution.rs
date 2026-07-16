@@ -190,7 +190,7 @@ fn extract_toml_permissions(
 
 /// Load `[permission]` rules from requirements.toml layers. Trust keys on the
 /// `is_system` flag (set at load, never from `path`): system → `SystemRequirements`,
-/// user `~/.grok` → `Requirements`, so [`is_admin_source`] trusts only the root tier.
+/// user `~/.fusion` → `Requirements`, so [`is_admin_source`] trusts only the root tier.
 fn load_requirements_permissions() -> Vec<Sourced<PermissionRule>> {
     xai_grok_config::requirements_layers()
         .into_iter()
@@ -244,7 +244,7 @@ fn find_project_grok_configs(cwd: &Path) -> Vec<PathBuf> {
 
 /// Load `[permission]` rules from native Grok TOML config files:
 ///
-///   * `~/.grok/config.toml` (lowest priority)
+///   * `~/.fusion/config.toml` (lowest priority)
 ///   * Each `.grok/config.toml` from the git repo root down to `cwd`
 ///     (highest priority last)
 ///
@@ -253,7 +253,7 @@ fn find_project_grok_configs(cwd: &Path) -> Vec<PathBuf> {
 fn load_config_toml_permissions(cwd: &Path) -> Vec<Sourced<PermissionRule>> {
     let mut rules = Vec::new();
 
-    // Global `~/.grok/config.toml` first (lowest priority within this layer).
+    // Global `~/.fusion/config.toml` first (lowest priority within this layer).
     // Gated on user_grok_home() so a project's .grok/config.toml is never read as
     // global permissions when neither GROK_HOME nor a home dir resolves.
     if let Some(global_path) = xai_grok_config::user_grok_home().map(|g| g.join("config.toml"))
@@ -991,7 +991,7 @@ fn requirements_lock_bool(ui: Option<&toml::Value>, key: &str, path: &Path) -> O
 }
 
 /// Pure form of [`yolo_disabled_by_policy`] over pre-loaded layers (testable
-/// without `~/.grok`); `path` only names the layer in a non-bool warning.
+/// without `~/.fusion`); `path` only names the layer in a non-bool warning.
 fn resolve_yolo_policy_block<'a>(
     requirement_layers: impl Iterator<Item = (&'a Path, &'a toml::Value)>,
 ) -> Option<&'static str> {
@@ -3281,7 +3281,7 @@ mod tests {
     #[test]
     fn admin_source_trusts_only_root_owned_tiers() {
         // Only managed-settings and the system-dir requirements layer are admin;
-        // the user-writable `~/.grok/requirements.toml` is not, despite its path.
+        // the user-writable `~/.fusion/requirements.toml` is not, despite its path.
         let p = std::path::PathBuf::from("x");
         assert!(is_admin_source(&RequirementSource::ManagedSettings {
             path: p.clone()

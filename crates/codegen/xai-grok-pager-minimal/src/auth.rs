@@ -141,7 +141,7 @@ pub(super) fn render_auth(buf: &mut Buffer, area: Rect, theme: &Theme, hint: &Mi
                 area,
                 y,
                 bottom,
-                Line::from(Span::styled("Sign in to Grok", bold)),
+                Line::from(Span::styled("Sign in to Fusion", bold)),
             );
             y = put_line(buf, area, y, bottom, Line::default());
             match url {
@@ -320,7 +320,7 @@ mod tests {
                 }
             }
         }
-        assert!(text.contains("Sign in to Grok"), "header: {text:?}");
+        assert!(text.contains("Sign in to Fusion"), "header: {text:?}");
         assert!(text.contains("accounts.x.ai/device"), "url: {text:?}");
         assert!(text.contains("ABCD-EFGH"), "device code: {text:?}");
         assert!(

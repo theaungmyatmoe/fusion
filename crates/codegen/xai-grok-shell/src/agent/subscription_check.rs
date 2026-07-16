@@ -16,13 +16,13 @@ use crate::auth::manager::RefreshReason;
 use crate::auth::token_type::TokenType;
 use std::sync::Arc;
 use std::time::Duration;
-/// Subscription tiers that qualify for Grok Build access.
+/// Subscription tiers that qualify for Fusion access.
 /// Any active subscription qualifies -- the access gate in remote settings
 /// controls which tiers are actually allowed.
 const QUALIFYING_TIERS: &[&str] = &[
-    "SuperGrokPro",
+    "FusionPro",
     "GrokPro",
-    "SuperGrokLite",
+    "FusionLite",
     "XPremiumPlus",
     "XPremium",
     "XBasic",
@@ -159,9 +159,9 @@ mod tests {
     #[test]
     fn qualifying_tiers_includes_all_paid_tiers() {
         for tier in &[
-            "SuperGrokPro",
+            "FusionPro",
             "GrokPro",
-            "SuperGrokLite",
+            "FusionLite",
             "XPremiumPlus",
             "XPremium",
             "XBasic",

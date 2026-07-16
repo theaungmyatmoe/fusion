@@ -1052,7 +1052,7 @@ pub async fn resolve_api_key(explicit: Option<&str>, grok_home: &Path) -> Result
         return Ok(key);
     }
     Err(anyhow!(
-        "no API key: pass --api-key, set XAI_API_KEY, or run `grok login` to populate \
+        "no API key: pass --api-key, set XAI_API_KEY, or run `fusion login` to populate \
          <grok-home>/auth.json. An expired OIDC token is auto-refreshed when a refresh_token \
          is present; if not, re-login is required."
     ))
@@ -1096,7 +1096,7 @@ async fn non_interactive_auth_key(grok_home: &Path) -> Result<Option<String>> {
         }
         Err(AuthError::NotLoggedIn) => Ok(None),
         Err(e) => Err(anyhow!(
-            "auth.json refresh failed: {e}. Run `grok login` to re-authenticate, \
+            "auth.json refresh failed: {e}. Run `fusion login` to re-authenticate, \
              or pass --api-key / set $XAI_API_KEY to bypass auth.json."
         )),
     }
@@ -2142,7 +2142,7 @@ mod tests {
     }
 
     /// Write an `auth.json` whose only entry is at the production
-    /// OIDC scope (the same scope `grok login` writes today and
+    /// OIDC scope (the same scope `fusion login` writes today and
     /// `AuthManager` reads). `auth_mode: api_key` skips the refresh
     /// path entirely — useful for "plain key, no refresh wanted"
     /// fixtures.
@@ -2447,7 +2447,7 @@ mod tests {
     /// * `GROK_AUTH` — inline-JSON credentials override that bypasses
     ///   the on-disk read entirely (`AuthManager::new`).
     /// * `GROK_AUTH_PATH` — overrides the auth.json path; if set to
-    ///   the operator's real `~/.grok/auth.json`, the test would read
+    ///   the operator's real `~/.fusion/auth.json`, the test would read
     ///   live OIDC credentials instead of the scratch fixture.
     /// * `GROK_AUTH_PROVIDER_COMMAND` — selects an external
     ///   refresher that could mint credentials independent of the

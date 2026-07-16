@@ -2,7 +2,7 @@ use toml::Value as TomlValue;
 
 /// Machine-readable channel name derived from the GCS stable pointer cache.
 ///
-/// Reads `stable_version` from `~/.grok/version.json` (written by the
+/// Reads `stable_version` from `~/.fusion/version.json` (written by the
 /// auto-updater) and compares the compiled-in version against it:
 /// - `Some("alpha")` when the current version is ahead of stable,
 /// - `Some("stable")` when at or behind stable,

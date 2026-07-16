@@ -1281,7 +1281,7 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
             if let Some(d) = app.dashboard.as_mut() {
                 d.dispatch.set_text("");
                 d.set_error_toast(&format!(
-                    "/{token} requires SuperGrok — upgrade at {}",
+                    "/{token} requires Fusion — upgrade at {}",
                     super::billing::UPSELL_URL_UPGRADE
                 ));
             }

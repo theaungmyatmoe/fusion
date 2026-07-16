@@ -3046,7 +3046,7 @@ async fn raw_recv_acp(reader: &mut tokio::io::ReadHalf<UnixStream>) -> serde_jso
 /// filter fences off other test processes appending to the same shared log.
 ///
 /// This binary does not sandbox GROK_HOME, so on a dev machine these entries
-/// land in the real `~/.grok` log — accepted: the server already writes
+/// land in the real `~/.fusion` log — accepted: the server already writes
 /// `leader.client.*` lines there from every test in this file, and the
 /// pid+request-id fence keeps the counting sound regardless of what else is
 /// in the file. (Bazel sandboxes HOME, so CI writes stay test-scoped.)

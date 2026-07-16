@@ -393,7 +393,7 @@ pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<
     effects
 }
 /// Handle the user accepting the folder-trust question: persist the grant for
-/// the workspace (writes `~/.grok/trusted_folders.toml`), mark trust resolved,
+/// the workspace (writes `~/.fusion/trusted_folders.toml`), mark trust resolved,
 /// then replay any deferred session startup (only if auth is also done).
 pub(in crate::app::dispatch) fn dispatch_trust_folder(app: &mut AppView) -> Vec<Effect> {
     if let TrustState::Pending { workspace } = &app.trust_state {

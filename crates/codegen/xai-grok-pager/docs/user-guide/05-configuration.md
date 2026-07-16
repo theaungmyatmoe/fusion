@@ -11,7 +11,7 @@ Configuration is resolved in this order (highest priority first):
 
 1. **CLI flags** (e.g., `--yolo`, `--model`, `--sandbox`)
 2. **Environment variables** (e.g., `XAI_API_KEY`, `GROK_MEMORY`)
-3. **config.toml** (`~/.grok/config.toml`)
+3. **config.toml** (`~/.fusion/config.toml`)
 4. **Managed / requirements config** (local files your org may deploy, e.g.
    `managed_config.toml` / `requirements.toml`)
 5. **Built-in defaults**
@@ -20,7 +20,7 @@ Configuration is resolved in this order (highest priority first):
 
 ## config.toml (Main Configuration)
 
-Location: `~/.grok/config.toml`
+Location: `~/.fusion/config.toml`
 
 If the file does not exist, Grok uses built-in defaults. Specify only the values you want to override.
 
@@ -156,7 +156,7 @@ active in the **scrollback** pane. It does not affect the input prompt.
 
 Toggle `vim_mode` at runtime with `/vim-mode`, or from the settings pane
 (`/settings` → **Vim scrollback navigation**). Grok writes the change to
-`[ui] vim_mode` in `~/.grok/config.toml` immediately and applies it to every
+`[ui] vim_mode` in `~/.fusion/config.toml` immediately and applies it to every
 future pager session — including new agents and subagents started in the same
 process. There is no separate per-session override; whatever is in
 `config.toml` is the source of truth on next launch.
@@ -305,9 +305,9 @@ url = "https://mcp.example.com/api/mcp"  # HTTP/SSE transport
 headers = { "x-mcp-session-id" = "{{session_id}}" }
 ```
 
-MCP servers can also be configured per-project in `.grok/config.toml`. Project-scoped config contributes `[mcp_servers]`, `[plugins]`, and `[permission]` rules; other sections load only from `~/.grok/config.toml`.
+MCP servers can also be configured per-project in `.grok/config.toml`. Project-scoped config contributes `[mcp_servers]`, `[plugins]`, and `[permission]` rules; other sections load only from `~/.fusion/config.toml`.
 
-Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) > `<repo-root>/.grok/config.toml` > `~/.grok/config.toml`. `[permission]` rules are not overridden by priority; they merge across all files with `deny` > `ask` > `allow` (see [22-permissions-and-safety.md](22-permissions-and-safety.md)).
+Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) > `<repo-root>/.grok/config.toml` > `~/.fusion/config.toml`. `[permission]` rules are not overridden by priority; they merge across all files with `deny` > `ask` > `allow` (see [22-permissions-and-safety.md](22-permissions-and-safety.md)).
 
 ### Memory
 
@@ -412,7 +412,7 @@ disabled = ["user/a1b2c3d4/noisy-plugin"]
 
 The `[hints]` table holds small persisted UI preferences — mostly "stop asking me" opt-outs. Grok writes these for you when you pick a "don't ask again" / "reset in config.toml" option in the TUI, but you can edit or remove them by hand. Deleting a key restores the default behavior.
 
-`[hints]` is read from the **effective config merge** (same precedence as other settings): system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`. Higher-priority layers override lower ones. The TUI only **writes** opt-outs to user `~/.grok/config.toml`.
+`[hints]` is read from the **effective config merge** (same precedence as other settings): system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`. Higher-priority layers override lower ones. The TUI only **writes** opt-outs to user `~/.fusion/config.toml`.
 
 ```toml
 [hints]
@@ -483,19 +483,19 @@ protocol automatically. Set `method` explicitly to override auto-detection.
 #### Notification Hooks
 
 Run custom commands when events occur. Hooks receive environment variables
-`$GROK_EVENT`, `$GROK_MESSAGE`, and `$GROK_SESSION_ID`.
+`$GROK_EVENT`, `$FUSION_MESSAGE`, and `$GROK_SESSION_ID`.
 
 ```toml
 # macOS native notification
 [[ui.notifications.hooks]]
-command = "terminal-notifier -title 'Grok' -message '$GROK_MESSAGE'"
+command = "terminal-notifier -title 'Fusion' -message '$FUSION_MESSAGE'"
 events = ["turn_complete", "approval_required"]
 only_unfocused = true
 timeout_secs = 10
 
 # Push to ntfy server
 [[ui.notifications.hooks]]
-command = "curl -s -d '$GROK_MESSAGE' ntfy.sh/my-grok-alerts"
+command = "curl -s -d '$FUSION_MESSAGE' ntfy.sh/my-grok-alerts"
 events = ["turn_complete"]
 only_unfocused = true
 timeout_secs = 10
@@ -590,7 +590,7 @@ default = "company-grok"
 [model.company-grok]
 model = "grok-build"
 base_url = "https://grok-proxy.acme.com/"
-name = "Grok Build Latest (Proxy)"
+name = "Fusion Latest (Proxy)"
 context_window = 128000
 
 [features]
@@ -601,7 +601,7 @@ telemetry = false
 
 ## pager.toml (Appearance Configuration)
 
-Location: `~/.grok/pager.toml`
+Location: `~/.fusion/pager.toml`
 
 Controls the visual appearance and behavior of the TUI. Changes are applied on restart.
 
@@ -765,7 +765,7 @@ Key environment variables. See the README for the complete list.
 
 | Variable | Description |
 |----------|-------------|
-| `GROK_HOME` | Override config directory (default: `~/.grok`) |
+| `GROK_HOME` | Override config directory (default: `~/.fusion`) |
 | `GROK_RESPECT_GITIGNORE` | Force gitignore filtering on (`1`) or off (`0`); overrides `[tools] respect_gitignore` |
 
 ### Telemetry
@@ -782,16 +782,16 @@ Key environment variables. See the README for the complete list.
 
 | Path | Description |
 |------|-------------|
-| `~/.grok/config.toml` | Main configuration file |
-| `~/.grok/pager.toml` | TUI appearance configuration |
-| `~/.grok/auth.json` | Authentication credentials (auto-managed) |
-| `~/.grok/sessions/` | Persisted sessions (organized by working directory) |
-| `~/.grok/memory/` | Cross-session memory files and index |
-| `~/.grok/skills/` | User-scoped skill definitions |
-| `~/.grok/plugins/` | User-scoped plugins |
-| `~/.grok/agents/` | User-scoped agent definitions |
-| `~/.grok/lsp.json` | LSP server configuration (user-scoped) |
-| `~/.grok/logs/` | Internal log files (for example `unified.jsonl`, MCP server logs) |
+| `~/.fusion/config.toml` | Main configuration file |
+| `~/.fusion/pager.toml` | TUI appearance configuration |
+| `~/.fusion/auth.json` | Authentication credentials (auto-managed) |
+| `~/.fusion/sessions/` | Persisted sessions (organized by working directory) |
+| `~/.fusion/memory/` | Cross-session memory files and index |
+| `~/.fusion/skills/` | User-scoped skill definitions |
+| `~/.fusion/plugins/` | User-scoped plugins |
+| `~/.fusion/agents/` | User-scoped agent definitions |
+| `~/.fusion/lsp.json` | LSP server configuration (user-scoped) |
+| `~/.fusion/logs/` | Internal log files (for example `unified.jsonl`, MCP server logs) |
 | `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules |
 | `.grok/skills/` | Project-scoped skill definitions |
 | `.grok/plugins/` | Project-scoped plugins |
@@ -807,7 +807,7 @@ Some configuration can be set per-project by placing files in `.grok/` within yo
 
 | File | What it configures |
 |------|--------------------|
-| `.grok/config.toml` | MCP servers, plugins, permission rules, and the `[mcp] max_output_bytes` tool-result cap (other sections load only from `~/.grok/config.toml`) |
+| `.grok/config.toml` | MCP servers, plugins, permission rules, and the `[mcp] max_output_bytes` tool-result cap (other sections load only from `~/.fusion/config.toml`) |
 | `.grok/skills/` | Project-specific skills |
 | `.grok/hooks/` | Project-specific lifecycle hooks |
 | `.grok/agents/` | Project-specific agent definitions |
@@ -825,14 +825,14 @@ Language servers power passive diagnostics and the optional `lsp` tool (see the 
 
 | Source | Location | Scope |
 |--------|----------|-------|
-| User | `~/.grok/lsp.json` | All projects |
+| User | `~/.fusion/lsp.json` | All projects |
 | Project | `.grok/lsp.json` | Current repository |
 | Plugin | A trusted plugin's `.lsp.json` file, or an inline `lspServers` block in its `plugin.json` | Wherever the plugin is enabled |
 
 When the same server name is defined by more than one source, it is resolved in this order (highest priority first):
 
 1. **Project** -- `.grok/lsp.json`
-2. **User** -- `~/.grok/lsp.json`
+2. **User** -- `~/.fusion/lsp.json`
 3. **Plugins** -- file-based `.lsp.json`, then inline `lspServers`, in plugin load order
 
 Project and user entries replace lower-priority ones with the same name. Plugin entries only add servers whose names are not already defined by a local file, so a local `lsp.json` always wins over a plugin. Plugin LSP servers load only after the plugin is trusted (see [Plugins](09-plugins.md)).

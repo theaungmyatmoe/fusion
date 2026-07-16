@@ -217,7 +217,7 @@ pub fn open_url_if_safe(url: &str, filter: SchemeFilter) -> bool {
 /// failure, the original string is returned unchanged so this is safe to apply
 /// to opener input from untrusted sources.
 ///
-/// Used by the SuperGrok upsell flow to attribute clicks to `referrer=grok-build`,
+/// Used by the Fusion upsell flow to attribute clicks to `referrer=grok-build`,
 /// matching the OAuth consent screen and x.ai/cli marketing links regardless of
 /// what the remote settings `gate_url` value happens to be.
 pub fn ensure_query_param(url: &str, key: &str, value: &str) -> String {

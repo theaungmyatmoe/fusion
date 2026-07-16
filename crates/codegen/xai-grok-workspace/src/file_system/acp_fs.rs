@@ -11,7 +11,7 @@ pub struct AcpSessionFs {
     /// being sent to the extension.  This is the defense-in-depth guard for
     /// AB overlay isolation: if a tool accidentally passes the display path
     /// (e.g., `/testbed/project/foo.rs`) instead of the overlay path
-    /// (`~/.grok/worktrees/.../b-overlay/foo.rs`), the adapter rewrites it
+    /// (`~/.fusion/worktrees/.../b-overlay/foo.rs`), the adapter rewrites it
     /// so the extension reads/writes to the correct overlay location.
     display_cwd: Option<PathBuf>,
 }

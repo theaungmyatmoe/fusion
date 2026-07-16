@@ -457,7 +457,7 @@ async fn handle_reload_all_mcp_servers(agent: &MvpAgent) -> ExtResult {
 /// the whole point of [`crate::config::reloader::ConfigUpdate::
 /// ProjectMcpServersChanged`] being a per-cwd variant. The legacy
 /// [`handle_reload_all_mcp_servers`] is still the fan-out for global
-/// `~/.grok/config.toml` edits.
+/// `~/.fusion/config.toml` edits.
 async fn handle_reload_project_mcp_servers(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     #[derive(Deserialize)]
     struct Params {
@@ -596,7 +596,7 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
 
 // internal/reload_models_cache
 
-/// Hot-reload the model catalog from `~/.grok/models_cache.json` after an
+/// Hot-reload the model catalog from `~/.fusion/models_cache.json` after an
 /// external write detected by the config watcher.
 ///
 /// Routed through the agent's ACP stream (injected by the

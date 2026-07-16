@@ -90,7 +90,7 @@
         ));
         assert!(app.voice_mode_enabled);
         assert!(handle_ext_notification(
-            &tier_settings_update("SuperGrok"),
+            &tier_settings_update("Fusion"),
             &mut app
         ));
         assert!(!app.is_api_key_auth);

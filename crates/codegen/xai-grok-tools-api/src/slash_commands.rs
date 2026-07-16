@@ -1,5 +1,5 @@
 //! Canonical slash-command wording (`/loop`, `/imagine`, `/imagine-video`, `/goal`),
-//! shared by every front-end (Grok Build shell/pager and other hosts) so
+//! shared by every front-end (Fusion shell/pager and other hosts) so
 //! expansions cannot drift.
 
 /// Canonical tool name advertised by the scheduler create tool. Gating code

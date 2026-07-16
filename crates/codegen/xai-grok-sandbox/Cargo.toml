@@ -3,7 +3,7 @@ license = "Apache-2.0"
 name = "xai-grok-sandbox"
 version = "0.1.0"
 edition.workspace = true
-description = "OS-level sandboxing for Grok Build using kernel primitives (Landlock/Seatbelt) via nono"
+description = "OS-level sandboxing for Fusion using kernel primitives (Landlock/Seatbelt) via nono"
 
 [dependencies]
 anyhow = { workspace = true }

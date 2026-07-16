@@ -725,7 +725,7 @@ pub struct AppView {
     pub scroll_state: MouseScrollState,
     /// Scroll config derived from terminal detection.
     pub scroll_config: ScrollConfig,
-    /// Current appearance config (hot-reloadable from ~/.grok/pager.toml).
+    /// Current appearance config (hot-reloadable from ~/.fusion/pager.toml).
     /// Stored here so new agents inherit the current config.
     pub appearance: AppearanceConfig,
     /// Notification service (terminal bell, OSC sequences, title updates).
@@ -1136,7 +1136,7 @@ pub struct AppView {
         std::collections::BTreeSet<(String, xai_grok_telemetry::events::AnnouncementCtaSurface)>,
     /// Access gate from `grok_build_access_gate`. `Some` = blocked.
     pub gate: Option<xai_grok_shell::auth::GateInfo>,
-    /// User-friendly subscription tier name (e.g. "SuperGrok", "Free").
+    /// User-friendly subscription tier name (e.g. "Fusion", "Free").
     pub subscription_tier: Option<String>,
     /// When the pager started auto-checking subscriptions (for 10-min timeout).
     pub paywall_check_started: Option<std::time::Instant>,
@@ -1187,7 +1187,7 @@ pub struct AppView {
     pub dashboard: Option<crate::views::dashboard::DashboardState>,
     /// Persisted dashboard configuration (pinned rows, reorderings,
     /// grouping). Loaded once on startup from
-    /// `~/.grok/config.toml`. `None` when the file/section is absent
+    /// `~/.fusion/config.toml`. `None` when the file/section is absent
     /// or contained malformed data — falls back to in-memory defaults.
     pub dashboard_persisted: Option<crate::views::dashboard::PersistedDashboard>,
     /// Per-platform key event normalizer.
@@ -4105,9 +4105,9 @@ impl AppView {
                         if !has_access && !self.access_gate_shown_logged {
                             self.access_gate_shown_logged = true;
                             xai_grok_telemetry::session_ctx::log_event(
-                                xai_grok_telemetry::events::SuperGrokUpsellShown {
+                                xai_grok_telemetry::events::FusionUpsellShown {
                                     source:
-                                        xai_grok_telemetry::events::SuperGrokUpsell::WelcomeScreen,
+                                        xai_grok_telemetry::events::FusionUpsell::WelcomeScreen,
                                     auth_method: self
                                         .login_method_id
                                         .as_ref()
@@ -6609,7 +6609,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         advertise_media_tools(&mut app);
         let meta = xai_grok_shell::auth::AuthMeta {
-            subscription_tier: Some("SuperGrok".into()),
+            subscription_tier: Some("Fusion".into()),
             ..Default::default()
         };
         app.apply_auth_meta(&meta);
@@ -6619,7 +6619,7 @@ pub(crate) mod tests {
         advertise_media_tools(&mut app);
         app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
         assert!(!app.tier_restricted_commands.is_empty());
-        app.subscription_tier = Some("SuperGrok".into());
+        app.subscription_tier = Some("Fusion".into());
         app.apply_tier_restrictions();
         assert!(app.tier_restricted_commands.is_empty());
         assert_tier_restricted_commands_present(&app);
@@ -6639,8 +6639,8 @@ pub(crate) mod tests {
         assert!(is_restricted_tier(Some("Free")));
         assert!(is_restricted_tier(Some("X Basic")));
         assert!(is_restricted_tier(Some("x_basic")));
-        assert!(!is_restricted_tier(Some("SuperGrok")));
-        assert!(!is_restricted_tier(Some("SuperGrok Heavy")));
+        assert!(!is_restricted_tier(Some("Fusion")));
+        assert!(!is_restricted_tier(Some("Fusion Heavy")));
         assert!(!is_restricted_tier(Some("X Premium")));
         assert!(!is_restricted_tier(Some("X Premium+")));
         assert!(!is_restricted_tier(Some("SomeFutureTier")));
@@ -6656,7 +6656,7 @@ pub(crate) mod tests {
         assert!(app.is_voice_tier_restricted());
         let mut app = test_app();
         let meta = xai_grok_shell::auth::AuthMeta {
-            subscription_tier: Some("SuperGrok".into()),
+            subscription_tier: Some("Fusion".into()),
             ..Default::default()
         };
         app.apply_auth_meta(&meta);
@@ -6666,7 +6666,7 @@ pub(crate) mod tests {
     fn apply_auth_meta_clears_gate_on_subscription() {
         let mut app = test_app();
         app.gate = Some(xai_grok_shell::auth::GateInfo {
-            message: "Subscribe to use Grok Build".into(),
+            message: "Subscribe to use Fusion".into(),
             url: Some("https://grok.com/supergrok?referrer=grok-build".into()),
             label: None,
         });

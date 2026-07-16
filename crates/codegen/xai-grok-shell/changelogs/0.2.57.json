@@ -26,7 +26,7 @@
   },
   {
     "category": "features",
-    "description": "**`grok plugin install <name>`** now resolves plugins from registered marketplaces instead of only local paths.",
+    "description": "**`fusion plugin install <name>`** now resolves plugins from registered marketplaces instead of only local paths.",
     "breaking_change": false
   },
   {

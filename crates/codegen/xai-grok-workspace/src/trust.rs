@@ -1,6 +1,6 @@
 //! Folder-trust store ("do you trust this folder?").
 //!
-//! Persists per-folder trust decisions to `~/.grok/trusted_folders.toml`.
+//! Persists per-folder trust decisions to `~/.fusion/trusted_folders.toml`.
 //! This is the durable backing store for the VS-Code-style folder-trust gate
 //! that decides whether repo-local MCP / LSP servers (which run arbitrary
 //! commands from repo-controlled config files) are allowed to spawn.
@@ -34,7 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// Filename of the folder-trust store under `~/.grok/`.
+/// Filename of the folder-trust store under `~/.fusion/`.
 pub const TRUST_FILE_NAME: &str = "trusted_folders.toml";
 
 /// A single folder's trust record.
@@ -352,7 +352,7 @@ impl TrustStore {
 /// repo (trust applies to the whole repo), otherwise the canonicalized `cwd`.
 ///
 /// A grok-managed worktree first collapses onto its recorded source repo's git
-/// ROOT (via the `~/.grok/worktrees.db` registry), so every `grok -w` worktree
+/// ROOT (via the `~/.fusion/worktrees.db` registry), so every `grok -w` worktree
 /// shares one trust key regardless of creation mode — including standalone clones
 /// that git can't link back to their source — and regardless of the subdir
 /// `grok -w` was launched from (the recorded source repo may be a repo subdir).
@@ -455,7 +455,7 @@ fn now_unix() -> Option<i64> {
 /// RAII exclusive advisory lock on a sidecar lock file, released on drop.
 ///
 /// Serializes concurrent `TrustStore` writers (multiple processes / instances
-/// sharing `~/.grok/`) across the whole read-modify-write so updates merge
+/// sharing `~/.fusion/`) across the whole read-modify-write so updates merge
 /// instead of clobbering each other. The lock is advisory; only writers that
 /// take it (i.e. this code) coordinate, which is sufficient since this store is
 /// the sole writer of its file.
@@ -486,7 +486,7 @@ impl Drop for ExclusiveLock {
 /// One-time migration of legacy project-hook trust grants into the unified
 /// folder-trust store. Idempotent and guarded to run at most once per process.
 ///
-/// The legacy `~/.grok/trusted-hook-projects` file listed one canonical project
+/// The legacy `~/.fusion/trusted-hook-projects` file listed one canonical project
 /// path per line; each becomes a folder-trust grant so the unified gate honors
 /// prior decisions. The legacy file is then renamed to `*.migrated` so it is
 /// read only once. A no-op when the legacy file is absent/already migrated or no

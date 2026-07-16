@@ -16,7 +16,7 @@ use crate::events;
 pub const SCHEMA_VERSION: &str = "v1";
 
 /// Meter/logger instrumentation scope name.
-pub const SCOPE_NAME: &str = "ai.xai.grok_code";
+pub const SCOPE_NAME: &str = "ai.fusion";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Event names

@@ -64,7 +64,7 @@ impl SlashCommand for ProvidersCommand {
                     display: "xai".to_string(),
                     match_text: "xai".to_string(),
                     insert_text: "xai ".to_string(),
-                    description: "Grok models (1-step setup: API key)".to_string(),
+                    description: "xAI models (1-step setup: API key)".to_string(),
                 },
             ]);
         }
@@ -216,7 +216,7 @@ pub fn apply_wizard_result(
         }
         "xai" => {
             let key = values.first().map(|s| s.as_str()).unwrap_or("");
-            save_provider_override("grok-build", "grok-build", "Grok Build", Some(key), Some("https://api.x.ai/v1"), 500000)?;
+            save_provider_override("grok-build", "grok-build", "Fusion", Some(key), Some("https://api.x.ai/v1"), 500000)?;
             Ok("✅ xAI configured! Model 'grok-build' is ready.\nSwitch anytime with /model".to_string())
         }
         other => Err(format!("Unknown provider: {}", other).into()),

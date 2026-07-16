@@ -1313,7 +1313,7 @@ impl AuthManager {
             }
             TokenType::LegacySession => {
                 // Deliberate side effect: re-read auth.json under the
-                // assumption that a sibling process (`grok login` from
+                // assumption that a sibling process (`fusion login` from
                 // another shell, the desktop app, etc.) may have refreshed
                 // the on-disk credentials. `pick_up_sibling_token` only
                 // mutates inner when the disk holds a *different valid*

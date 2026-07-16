@@ -739,8 +739,8 @@ impl AgentView {
             .models
             .current_model_name()
             .unwrap_or_else(|| "unknown".to_string());
-        if model_id == "Grok Build" {
-            model_id = "Fusion Build".to_string();
+        if model_id == "Fusion" {
+            model_id = "Fusion".to_string();
         }
         let effective_plan = self.plan_mode_pending.unwrap_or(self.plan_mode_active);
         let casual_commenting = self.is_casual_commenting();

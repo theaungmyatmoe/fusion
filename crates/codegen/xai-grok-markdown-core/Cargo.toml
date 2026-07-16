@@ -3,7 +3,7 @@ license = "Apache-2.0"
 name = "xai-grok-markdown-core"
 version = "0.1.0"
 edition.workspace = true
-description = "Headless markdown analysis sharing Grok Build's exact pulldown-cmark config."
+description = "Headless markdown analysis sharing Fusion's exact pulldown-cmark config."
 
 [dependencies]
 pulldown-cmark = { workspace = true }

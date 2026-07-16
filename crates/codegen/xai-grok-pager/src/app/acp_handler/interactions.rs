@@ -81,7 +81,7 @@ pub(crate) fn handle_ask_user_question(
                 LocalQuestionKind::Fork { .. } => "/fork",
                 LocalQuestionKind::NewSession => "/new",
                 LocalQuestionKind::CreditLimitUpsell { .. } => "credit-limit upsell",
-                LocalQuestionKind::FreeUsageUpsell { .. } => "SuperGrok upsell",
+                LocalQuestionKind::FreeUsageUpsell { .. } => "Fusion upsell",
                 LocalQuestionKind::AgentTypeMismatch { .. } => "model switch",
                 LocalQuestionKind::ProjectSelect { .. } => "project select",
             };

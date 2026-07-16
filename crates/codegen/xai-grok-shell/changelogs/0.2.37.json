@@ -11,7 +11,7 @@
   },
   {
     "category": "features",
-    "description": "**`grok update`** now restarts any older running leader so all clients get the new binary.",
+    "description": "**`fusion update`** now restarts any older running leader so all clients get the new binary.",
     "breaking_change": false
   },
   {

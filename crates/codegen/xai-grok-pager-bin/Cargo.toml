@@ -6,7 +6,7 @@ license = "Apache-2.0"
 authors = ["xAI"]
 default-run = "fusion"
 
-# Composition-root binary for the Grok Build TUI. The artifact is still named
+# Composition-root binary for the Fusion TUI. The artifact is still named
 # `fusion`. This package exists so the binary can link both the pager
 # library and the optional `xai-grok-pager-minimal` render mode: `minimal`
 # depends on `xai-grok-pager`, so the pager library cannot depend back on it

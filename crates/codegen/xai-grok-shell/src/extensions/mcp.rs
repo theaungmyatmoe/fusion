@@ -1831,7 +1831,7 @@ mod tests {
                         url: "https://mcp.linear.app".to_string(),
                         scope: Some("team".to_string()),
                         scope_id: Some("team-uuid-123".to_string()),
-                        scope_name: Some("Grok CLI".to_string()),
+                        scope_name: Some("Fusion CLI".to_string()),
                     },
                     source_label: None,
                     session: None,
@@ -1868,7 +1868,7 @@ mod tests {
         assert_eq!(json["servers"][0]["url"], "https://mcp.linear.app");
         assert_eq!(json["servers"][0]["scope"], "team");
         assert_eq!(json["servers"][0]["scopeId"], "team-uuid-123");
-        assert_eq!(json["servers"][0]["scopeName"], "Grok CLI");
+        assert_eq!(json["servers"][0]["scopeName"], "Fusion CLI");
         assert!(json["servers"][0].get("session").is_none());
         // Managed gateway connectors are not serialized as local transports.
         let gateway = serde_json::to_value(McpServerEntry {

@@ -13,7 +13,7 @@ use toml::Value as TomlValue;
 /// | requirement  | `[features] mcp_liveness_watchers` in `requirements.toml`       |
 /// | cli          | (none — no CLI flag)                                            |
 /// | env          | `GROK_MCP_LIVENESS_WATCHERS` (handled by `BoolFlag::env`)       |
-/// | config       | `[features] mcp_liveness_watchers` in `~/.grok/config.toml`     |
+/// | config       | `[features] mcp_liveness_watchers` in `~/.fusion/config.toml`     |
 /// | managed      | `[features] mcp_liveness_watchers` in `managed_config.toml`     |
 /// | feature_flag | (none yet — remote settings plumbing TBD)                            |
 /// | default      | `true`                                                          |
@@ -51,7 +51,7 @@ pub fn resolve_mcp_liveness_watchers(
 /// | requirement  | `[features] mcp_auto_restart` in `requirements.toml`            |
 /// | cli          | (none — no CLI flag)                                            |
 /// | env          | `GROK_MCP_AUTO_RESTART` (handled by `BoolFlag::env`)            |
-/// | config       | `[features] mcp_auto_restart` in `~/.grok/config.toml`          |
+/// | config       | `[features] mcp_auto_restart` in `~/.fusion/config.toml`          |
 /// | managed      | `[features] mcp_auto_restart` in `managed_config.toml`          |
 /// | feature_flag | (none yet — remote settings plumbing TBD)                            |
 /// | default      | `true`                                                          |
@@ -89,7 +89,7 @@ pub fn resolve_mcp_auto_restart(
 /// | requirement  | `[features] mcp_push_server_status` in `requirements.toml`      |
 /// | cli          | (none — no CLI flag)                                            |
 /// | env          | `GROK_MCP_PUSH_SERVER_STATUS` (handled by `BoolFlag::env`)      |
-/// | config       | `[features] mcp_push_server_status` in `~/.grok/config.toml`    |
+/// | config       | `[features] mcp_push_server_status` in `~/.fusion/config.toml`    |
 /// | managed      | `[features] mcp_push_server_status` in `managed_config.toml`    |
 /// | feature_flag | (none yet — remote settings plumbing TBD)                            |
 /// | default      | `true`                                                          |
@@ -128,7 +128,7 @@ pub fn resolve_mcp_push_server_status(
 /// | requirement  | `[features] mcp_recursive_config_watch` in `requirements.toml`      |
 /// | cli          | (none — no CLI flag)                                                |
 /// | env          | `GROK_MCP_RECURSIVE_CONFIG_WATCH` (handled by `BoolFlag::env`)      |
-/// | config       | `[features] mcp_recursive_config_watch` in `~/.grok/config.toml`    |
+/// | config       | `[features] mcp_recursive_config_watch` in `~/.fusion/config.toml`    |
 /// | managed      | `[features] mcp_recursive_config_watch` in `managed_config.toml`    |
 /// | feature_flag | (none yet — remote settings plumbing TBD)                                |
 /// | default      | `true`                                                              |

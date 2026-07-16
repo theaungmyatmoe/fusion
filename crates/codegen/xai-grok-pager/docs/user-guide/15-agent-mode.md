@@ -32,7 +32,7 @@ Clients that use this mode include:
 
 ### Options
 
-These options belong to the `grok agent` command and apply to every mode. Pass them before the mode name, for example `grok agent --model grok-build stdio`. The `stdio` subcommand itself takes no options.
+These options belong to the `fusion agent` command and apply to every mode. Pass them before the mode name, for example `fusion agent --model grok-build stdio`. The `stdio` subcommand itself takes no options.
 
 | Flag                       | Description                                                       |
 | -------------------------- | ---------------------------------------------------------------- |

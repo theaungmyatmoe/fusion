@@ -398,7 +398,7 @@ mod tests {
         let mut state = ModelState::default();
         state.available.insert(
             id.clone(),
-            model_with_effort("grok-build", "Grok Build", "high"),
+            model_with_effort("grok-build", "Fusion", "high"),
         );
         state.set_current(id.clone(), Some(ReasoningEffort::Xhigh));
         assert_eq!(state.reasoning_effort, Some(ReasoningEffort::Xhigh));
@@ -407,7 +407,7 @@ mod tests {
         let mut refreshed = IndexMap::new();
         refreshed.insert(
             id.clone(),
-            model_with_effort("grok-build", "Grok Build", "high"),
+            model_with_effort("grok-build", "Fusion", "high"),
         );
         state.update_catalog(refreshed, Some(id.clone()));
 

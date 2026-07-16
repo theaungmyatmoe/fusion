@@ -2860,8 +2860,8 @@ fn validate_hooks_path_rejects_outside_grok_home() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("must be under ~/.grok/"),
-        "should mention ~/.grok/ restriction, got: {msg}"
+        msg.contains("must be under ~/.fusion/"),
+        "should mention ~/.fusion/ restriction, got: {msg}"
     );
 }
 #[test]
@@ -2872,7 +2872,7 @@ fn validate_hooks_path_rejects_traversal_attack() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("must be under ~/.grok/"),
+        msg.contains("must be under ~/.fusion/"),
         "traversal should be rejected, got: {msg}"
     );
 }
@@ -2882,7 +2882,7 @@ fn validate_hooks_path_accepts_grok_hooks_subdir() {
     let valid_path = grok_home.join("hooks").join("my-hooks");
     let _ = std::fs::create_dir_all(&valid_path);
     let result = validate_hooks_path(valid_path.to_str().unwrap());
-    assert!(result.is_ok(), "path under ~/.grok/ should be accepted");
+    assert!(result.is_ok(), "path under ~/.fusion/ should be accepted");
 }
 #[test]
 fn managed_settings_disables_features_and_requirements_overrides() {

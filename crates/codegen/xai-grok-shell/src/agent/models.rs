@@ -663,12 +663,12 @@ impl ModelsManager {
         }
     }
 
-    /// Hot-reload the catalog from `~/.grok/models_cache.json` after an
+    /// Hot-reload the catalog from `~/.fusion/models_cache.json` after an
     /// external write (detected by the config file watcher).
     ///
     /// A long-running leader otherwise only refreshes its catalog from its
     /// *own* fetch paths (startup prefetch, auth change, response-header etag).
-    /// When another grok process sharing `~/.grok` (a `--no-leader` run, a
+    /// When another grok process sharing `~/.fusion` (a `--no-leader` run, a
     /// newer client, grok-desktop) fetches a fresher `/v1/models` catalog and
     /// persists it, this picks it up without a network round-trip.
     ///
@@ -1374,7 +1374,7 @@ impl ModelsCacheManager {
 ///
 /// Each entry is keyed by its `id` field (falling back to the `model` slug
 /// when `id` is absent). This lets A/B experiments that share the same
-/// routing slug (e.g. "Auto" and "Grok Build" both route to `grok-build`)
+/// routing slug (e.g. "Auto" and "Fusion" both route to `grok-build`)
 /// coexist in the catalog without collision.
 fn build_prefetched_map(
     models: Vec<config::ModelEntryConfig>,
@@ -3397,7 +3397,7 @@ mod tests {
     fn build_prefetched_map_distinct_ids_same_slug() {
         let entries = vec![
             make_entry_config_with_id(Some("auto"), "grok-build", Some("Auto")),
-            make_entry_config_with_id(Some("grok-build"), "grok-build", Some("Grok Build")),
+            make_entry_config_with_id(Some("grok-build"), "grok-build", Some("Fusion")),
             make_entry_config_with_id(
                 Some("grok-composer-2.5-fast"),
                 "grok-composer-2.5-fast",
@@ -3469,7 +3469,7 @@ mod tests {
         let entries = vec![make_entry_config_with_id(
             None,
             "grok-build",
-            Some("Grok Build"),
+            Some("Fusion"),
         )];
         let map = build_prefetched_map(entries, None);
 

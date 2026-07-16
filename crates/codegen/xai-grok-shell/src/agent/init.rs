@@ -108,7 +108,7 @@ fn resolve_config(cfg: &AgentConfig, auth_manager: &AuthManager) -> AgentConfig 
     if cfg.storage_mode == StorageMode::Writeback
         && !auth_manager.current().is_some_and(|a| a.is_xai_auth())
     {
-        tracing::info!("Writeback is disabled: requires auth with grok.com");
+        tracing::info!("Writeback is disabled: requires auth with Fusion");
         cfg.storage_mode = StorageMode::Local;
     }
 

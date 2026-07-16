@@ -11,7 +11,7 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str =
 #[cfg(target_os = "linux")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.json";
 
-/// The default user grok directory (`~/.grok`, canonicalized) used when
+/// The default user grok directory (`~/.fusion`, canonicalized) used when
 /// `GROK_HOME` is unset. Exposed so callers (e.g. display helpers) can detect
 /// whether [`grok_home()`] is the default without duplicating the computation.
 ///
@@ -19,7 +19,7 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.js
 /// Windows, std returns a verbatim path (`\\?\C:\Users\...`) which external
 /// tools choke on — e.g. `git clone` rejects `\\?\` destinations with
 /// "Invalid argument", breaking marketplace cache clones under
-/// `~/.grok/marketplace-cache`. `dunce` strips the prefix whenever the path
+/// `~/.fusion/marketplace-cache`. `dunce` strips the prefix whenever the path
 /// is safely representable in legacy form; on non-Windows it is identical to
 /// `std::fs::canonicalize`.
 ///
@@ -31,7 +31,7 @@ pub fn default_grok_home() -> PathBuf {
     dunce::canonicalize(&home).unwrap_or(home).join(".fusion")
 }
 
-/// Per-user config directory: `$FUSION_HOME`, `$GROK_HOME` or `~/.fusion`. Created if needed.
+/// Per-user config directory: `$FUSION_HOME`, `$GROK_HOME` (compat), or `~/.fusion`. Created if needed.
 pub fn grok_home() -> PathBuf {
     GROK_HOME
         .get_or_init(|| {
@@ -49,7 +49,7 @@ pub fn grok_home() -> PathBuf {
 }
 
 /// The user-global grok home, but only when one genuinely resolves: `Some` when
-/// `$FUSION_HOME` or `$GROK_HOME` is set or a home directory is found, `None` otherwise. Unlike
+/// `$FUSION_HOME` or `$FUSION_HOME` is set or a home directory is found, `None` otherwise. Unlike
 /// [`grok_home()`], this never falls back to a cwd-relative `.fusion`, so callers
 /// that *scan* user-global grok resources (hooks, marketplace sources, ...) don't
 /// mistake a project's `.fusion` tree for the user-global one when no home resolves.

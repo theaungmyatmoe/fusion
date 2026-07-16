@@ -1,4 +1,4 @@
-//! Leader-mode (`grok agent --leader stdio`) test harness.
+//! Leader-mode (`fusion agent --leader stdio`) test harness.
 //!
 //! Spawns the real binary as a stdio client whose bridge elects a leader
 //! subprocess hosting the actual sessions, speaks ACP over pipes, and
@@ -102,7 +102,7 @@ impl acp::Client for LeaderAcpClient {
     }
 }
 
-/// A `grok agent --leader stdio` client subprocess speaking ACP over pipes.
+/// A `fusion agent --leader stdio` client subprocess speaking ACP over pipes.
 /// The leader subprocess it elects hosts the actual sessions.
 pub struct LeaderStdioClient {
     pub conn: acp::ClientSideConnection,
@@ -149,7 +149,7 @@ impl LeaderStdioClient {
             .env("GROK_TRACE_UPLOAD", "false")
             .env("GROK_INSTRUMENTATION", "disabled")
             // Inherited by the spawned leader, whose stderr goes to
-            // ~/.grok/leader.log — keep it chatty for diagnosis.
+            // ~/.fusion/leader.log — keep it chatty for diagnosis.
             .env("RUST_LOG", "xai_grok_shell=debug");
 
         let (mut child, stderr) = spawn_piped_with_stderr_capture(cmd);

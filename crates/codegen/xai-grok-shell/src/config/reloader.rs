@@ -21,7 +21,7 @@ pub enum ConfigUpdate {
     /// A **broadcast** MCP reload — applies to every active session
     /// regardless of cwd. Fires for two cases:
     ///
-    /// 1. The global `[mcp_servers]` table in `~/.grok/config.toml`
+    /// 1. The global `[mcp_servers]` table in `~/.fusion/config.toml`
     ///    changed.
     /// 2. The user's home-level `~/.claude.json` changed.
     ///    `load_claude_json_mcp_servers_as_configs` reads this file
@@ -63,7 +63,7 @@ pub enum ConfigUpdate {
     /// The `[model.*]` entries in config.toml changed. Agent should re-resolve
     /// its model list (BYOK models added/removed, default or surprise changed).
     ModelsChanged,
-    /// `~/.grok/models_cache.json` was rewritten on disk (possibly by another
+    /// `~/.fusion/models_cache.json` was rewritten on disk (possibly by another
     /// via `ModelsManager::reload_from_disk_cache`, which content-dedupes
     /// self-writes (`persist` / `renew_ttl`) before applying. No payload —
     /// validation (TTL, version, auth method) requires `ModelsManager` state
@@ -243,7 +243,7 @@ impl ConfigReloader {
             // `ProjectMcpServersChanged { cwd }` per affected project
             // root. The legacy unit `McpServersChanged` above stays
             // for global-config edits — both variants can fire in the
-            // same tick (e.g. `~/.grok/config.toml` AND
+            // same tick (e.g. `~/.fusion/config.toml` AND
             // `<cwd>/.mcp.json` edited together).
             for cwd in project_cwds {
                 // Skip the dispatch when the project config bytes are
@@ -329,7 +329,7 @@ impl ConfigReloader {
         };
 
         // MCP servers — compare [mcp_servers] table in the **global**
-        // config (`~/.grok/config.toml`) via toml::Value. Project-
+        // config (`~/.fusion/config.toml`) via toml::Value. Project-
         // scoped changes (`<cwd>/.grok/config.toml`,
         // `<cwd>/.mcp.json`) are dispatched separately via
         // `ConfigUpdate::ProjectMcpServersChanged { cwd }` (see
@@ -457,7 +457,7 @@ fn collect_project_cwds(batch: &[ConfigChangeEvent]) -> Vec<PathBuf> {
 /// the hash can't drift from the set the merge actually reads, plus
 /// `<cwd>/.claude.json` (watched at the project root). A stable hash
 /// means the reload would be a no-op. Home-level sources
-/// (`~/.grok/config.toml`, `~/.claude.json`, `~/.cursor/mcp.json`)
+/// (`~/.fusion/config.toml`, `~/.claude.json`, `~/.cursor/mcp.json`)
 /// change through their own events.
 ///
 /// Returns `None` on a non-`NotFound` read error so the caller

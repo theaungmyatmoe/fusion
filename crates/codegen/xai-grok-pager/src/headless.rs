@@ -507,14 +507,14 @@ fn auto_respond_to_permissions(
 /// "Not signed in" error message, tailored to the session type.
 fn auth_required_message(interactive: bool) -> String {
     if interactive {
-        "Not signed in. Run `grok login` to authenticate \
+        "Not signed in. Run `fusion login` to authenticate \
          (or `grok login --device-code` if no browser is available)."
             .to_string()
     } else {
         "Not signed in. To authenticate without a browser, run:\n  \
          grok login --device-code\n\n\
          Alternatively, set the XAI_API_KEY environment variable \
-         or run `grok login` on a machine with a browser."
+         or run `fusion login` on a machine with a browser."
             .to_string()
     }
 }
@@ -1279,7 +1279,7 @@ pub async fn run_single_turn(
 
     // Handle result
     if track_active {
-        // Non-blocking flock so a slow/network ~/.grok can't hang exit.
+        // Non-blocking flock so a slow/network ~/.fusion can't hang exit.
         let _ = xai_grok_shell::active_sessions::try_unregister(&session_id);
     }
     cancel.cancel();

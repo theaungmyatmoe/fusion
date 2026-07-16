@@ -159,7 +159,7 @@
 - **IME text input in Otty** no longer attaches unrelated clipboard images on every character.
 - **Rewind** now fully removes the selected turn from both scrollback and the model's conversation history.
 - **Queued prompts** now abort long blocking waits instead of waiting for the full timeout.
-- **File links and media** now work for worktree sessions under ~/.grok/worktrees/.
+- **File links and media** now work for worktree sessions under ~/.fusion/worktrees/.
 - **Collapsed Read/Edit tool rows** now show only the filename instead of long absolute paths.
 - **Clipboard copies on Wayland** now succeed even when the terminal loses focus mid-copy.
 - **User messages queued** behind an auto-wake turn are no longer lost when the user presses Ctrl+C.
@@ -259,7 +259,7 @@
 - **grok models** banner now correctly reports per-model API keys and deployment keys.
 - MCP tool output size limit is now configurable via environment variable, config.toml, or remote settings (default unchanged).
 - Chat conversations listed in the unified sidebar can now be renamed or deleted from the desktop app.
-- You can now add a local directory as a plugin marketplace source with `grok plugin marketplace add`.
+- You can now add a local directory as a plugin marketplace source with `fusion plugin marketplace add`.
 - **Auto permission mode** now prompts far less often on routine development commands.
 - Short media paths the model prints (images/1.jpg) are now clickable and open the file.
 - **Preview** now prefers common dev ports like 8080 when multiple HTTP servers are detected.
@@ -517,7 +517,7 @@
 
 ## Performance
 
-- **`grok update`** downloads have a longer timeout.
+- **`fusion update`** downloads have a longer timeout.
 
 
 # 0.2.77 — 2026-06-30
@@ -586,7 +586,7 @@
 
 ## Bug Fixes
 
-- **Fixed `grok agent stdio` hangs** on Windows when used with persistent clients such as VS Code.
+- **Fixed `fusion agent stdio` hangs** on Windows when used with persistent clients such as VS Code.
 
 
 # 0.2.70 — 2026-06-27
@@ -603,7 +603,7 @@
 
 - **Session recaps** (/recap and return-from-away) now show the full summary instead of being cut off mid-sentence.
 - **Vim mode** now focuses the prompt when you press / on a brand-new empty session.
-- **Fixed `grok agent stdio` startup hangs** on Windows when used with persistent clients such as VS Code or grok-desktop.
+- **Fixed `fusion agent stdio` startup hangs** on Windows when used with persistent clients such as VS Code or grok-desktop.
 - **`/mcps` list** no longer shows stale disabled entries when managed gateway tools are enabled.
 - **Mermaid diagrams opened via [Open Image]** now render at higher resolution instead of terminal size.
 - **Pressing `r` in scrollback** no longer accidentally rewinds the session.
@@ -814,7 +814,7 @@
 
 - Terminal command output files are now capped at 5 GB during execution and truncated to 64 MB after the process exits.
 - Interjection messages now display the actual user text instead of a generic header.
-- The legacy `agent` command is now kept in sync with `grok` after running `grok update`.
+- The legacy `agent` command is now kept in sync with `grok` after running `fusion update`.
 - Headless (`grok -p`) runs now wait for background tasks and subagents to finish before exiting.
 
 
@@ -823,7 +823,7 @@
 ## Features
 
 - Improved resilience to network blips during long responses by resuming instead of failing the turn.
-- **`grok plugin install <name>`** now resolves plugins from registered marketplaces instead of only local paths.
+- **`fusion plugin install <name>`** now resolves plugins from registered marketplaces instead of only local paths.
 
 ## Bug Fixes
 
@@ -953,7 +953,7 @@
 
 ## Breaking Changes
 
-- **`grok mcp add`** now accepts positional arguments (e.g. `grok mcp add filesystem -- npx...`), supports --scope project, and adds -e/-H flags for env/headers.
+- **`fusion mcp add`** now accepts positional arguments (e.g. `fusion mcp add filesystem -- npx...`), supports --scope project, and adds -e/-H flags for env/headers.
 
 ## Features
 
@@ -966,7 +966,7 @@
 
 - **Plan mode exit reminders** no longer appear after the model has already started implementing the plan.
 - **Expanded thinking blocks** in scrollback now remain expanded when the agent finishes them.
-- **`grok update`** no longer downloads the same binary twice when multiple updaters or leader checks run concurrently.
+- **`fusion update`** no longer downloads the same binary twice when multiple updaters or leader checks run concurrently.
 - **Background task IDs** after /compact are now shown verbatim so the model can reference them correctly in later tool calls.
 - **Typing /** while scrollback is focused now focuses the prompt and opens the slash-command dropdown.
 - **Dashboard empty state** is now a single hint line; dispatch and peek placeholders appear only when unfocused.
@@ -1084,7 +1084,7 @@
 
 - **ask_user_question** tool can now be enabled in allowlists without requiring plan-mode tools.
 - **Shift+Tab** mode cycling (Normal → Plan → Auto-Approve) works again in the agent view.
-- **Ctrl+C** now cancels a blocking `grok update` cleanly instead of leaving an orphaned download repainting the terminal.
+- **Ctrl+C** now cancels a blocking `fusion update` cleanly instead of leaving an orphaned download repainting the terminal.
 
 
 # 0.2.42
@@ -1115,7 +1115,7 @@
 
 ## Features
 
-- **`grok --debug`** now produces per-session log files under ~/.grok/debug/ even with a leader process.
+- **`grok --debug`** now produces per-session log files under ~/.fusion/debug/ even with a leader process.
 
 ## Bug Fixes
 
@@ -1156,7 +1156,7 @@
 ## Features
 
 - **MCP tool result queries** now list only command-line tools actually present on your system.
-- **`grok update`** now restarts any older running leader so all clients get the new binary.
+- **`fusion update`** now restarts any older running leader so all clients get the new binary.
 - **Long-running bash commands** that hit the timeout are now moved to the background by default instead of killed.
 
 ## Bug Fixes
@@ -1183,7 +1183,7 @@
 
 ## Features
 
-- **`grok login`** now defaults to device code flow, which works reliably in SSH, WSL, VPN, and browser-restricted environments.
+- **`fusion login`** now defaults to device code flow, which works reliably in SSH, WSL, VPN, and browser-restricted environments.
 
 ## Bug Fixes
 
@@ -1272,7 +1272,7 @@
 ## Bug Fixes
 
 - **Large pasted content** no longer triggers context-window errors or breaks compaction and memory flush.
-- **API-key users** can now run `grok agent --leader` without forced interactive login or timeouts.
+- **API-key users** can now run `fusion agent --leader` without forced interactive login or timeouts.
 - **Compaction** no longer retries endlessly on credit, size, or auth failures; shows a clear message instead.
 - **Windows PowerShell and cmd.exe** no longer falsely reject commands containing `&`.
 - **web_fetch** no longer crashes the CLI on pages whose root element matches a cleaning selector.
@@ -1640,7 +1640,7 @@
 
 ## Features
 
-- **New `grok plugin` commands** let you manage plugins and marketplaces directly from the terminal.
+- **New `fusion plugin` commands** let you manage plugins and marketplaces directly from the terminal.
 
 ## Bug Fixes
 
@@ -1685,7 +1685,7 @@
 
 - **Todo list reminders** now appear at turn end when pending tasks remain after compaction.
 - **Laziness detection** can now be enabled per-model to automatically nudge idle agents.
-- **New `grok plugin` commands** let you manage plugins and marketplaces directly from the terminal.
+- **New `fusion plugin` commands** let you manage plugins and marketplaces directly from the terminal.
 - New `/export` command and `grok export` let you save or copy conversation transcripts as Markdown.
 
 ## Bug Fixes
@@ -2064,7 +2064,7 @@
 - **Directly waited** background tasks no longer trigger extra notifications.
 - **Loop indicators** are now properly removed when subagents shut down.
 - **run_terminal_cmd** tool name restored; background parameter rename preserved.
-- **Model picker** now recovers automatically after sleep/resume or temporary network issues instead of staying stuck on Grok Build.
+- **Model picker** now recovers automatically after sleep/resume or temporary network issues instead of staying stuck on Fusion.
 - **MCP server connections** now succeed for servers that enforce audience binding on OAuth tokens.
 - **read_file** now accesses gitignored files by default (grep/list_dir/search_replace still block them unless configured).
 - **--no-ask-user** flag now correctly disables the ask_user_question tool in both TUI and headless modes.
@@ -2282,7 +2282,7 @@
 - **`grok -w my-worktree`** creates a custom-named worktree folder.
 - **Session picker** now groups entries by repository with headers and indents.
 - **Remote workspaces** now handle multiple sessions over one connection.
-- **`/usage manage`** now opens billing page; **`grok login`** enforces tiers correctly after refresh.
+- **`/usage manage`** now opens billing page; **`fusion login`** enforces tiers correctly after refresh.
 
 ## Bug Fixes
 
@@ -2305,7 +2305,7 @@
 
 ## Bug Fixes
 
-- **Legacy web login** no longer treated as first-party xAI account for sharing and billing; prompts **`grok login`** upgrade.
+- **Legacy web login** no longer treated as first-party xAI account for sharing and billing; prompts **`fusion login`** upgrade.
 - **Billing display** now includes pay-as-you-go status and monthly limits with better error handling.
 - **Copy auth URLs** now works in Docker containers and displays cleanly for external providers.
 
@@ -2318,7 +2318,7 @@
 
 ## Breaking Changes
 
-- **Legacy authentication** removed; run **`grok login`** to upgrade to OAuth.
+- **Legacy authentication** removed; run **`fusion login`** to upgrade to OAuth.
 
 ## Features
 
@@ -2332,7 +2332,7 @@
 
 ## Bug Fixes
 
-- **Legacy web login** no longer treated as premium xAI account; run **`grok login`** instead.
+- **Legacy web login** no longer treated as premium xAI account; run **`fusion login`** instead.
 - **Session picker** removes duplicate blank sessions from same folder.
 - **Sessions from deleted worktrees** still appear in picker after restart.
 - **Credit bar** now shows pay-as-you-go status and monthly usage limits.
@@ -2583,7 +2583,7 @@
 ## Features
 
 - **Billing credits and usage** now fetchable for display in pager/desktop.
-- **New `grok mcp doctor`** diagnoses MCP servers and suggests fixes.
+- **New `fusion mcp doctor`** diagnoses MCP servers and suggests fixes.
 - **Session picker** now shows precise last activity times.
 
 ## Bug Fixes
@@ -2615,7 +2615,7 @@
 
 ## Features
 
-- **New `grok mcp doctor`** diagnoses MCP server configuration and connectivity.
+- **New `fusion mcp doctor`** diagnoses MCP server configuration and connectivity.
 - **Subagents** can now target specific directories without new worktrees.
 - **Session picker** now shows accurate last activity times.
 
@@ -2685,7 +2685,7 @@
 
 - **Image compression** now skips small files and warns if large images can't be resized under 3.75 MB limit.
 - **Feedback errors** now appear in the session instead of failing silently.
-- **Clearer login error messages** now suggest `grok login`, API key env var, or config.toml.
+- **Clearer login error messages** now suggest `fusion login`, API key env var, or config.toml.
 
 
 # 0.1.193
@@ -2700,7 +2700,7 @@
 ## Bug Fixes
 
 - **Large images** (>3.75MB after decoding) now compress to JPEG efficiently, keeping originals if needed.
-- **Authentication errors** now clearly suggest `grok login`, env var, or config.toml api_key.
+- **Authentication errors** now clearly suggest `fusion login`, env var, or config.toml api_key.
 - **Fixed false-positive loop warnings** for different shell commands during edit-test cycles.
 - **Configured MCP servers** now appear reliably in the initial session prompt.
 
@@ -2792,7 +2792,7 @@
 
 ## Features
 
-- **Improved `grok login`** with automatic code delivery from browser consent page.
+- **Improved `fusion login`** with automatic code delivery from browser consent page.
 
 ## Bug Fixes
 
@@ -3000,7 +3000,7 @@
 
 ## Features
 
-- **X Premium and Premium+** tiers now grant access to Grok Build.
+- **X Premium and Premium+** tiers now grant access to Fusion.
 
 ## Bug Fixes
 
@@ -3139,7 +3139,7 @@
 
 - **`grok sessions search`** now supports **full-text queries** across chat content and tools.
 - **Session picker** now combines fuzzy matching with **deep content search** results.
-- **Unified logs** now saved to `~/.grok/logs/unified.jsonl` with **Download Logs** in desktop.
+- **Unified logs** now saved to `~/.fusion/logs/unified.jsonl` with **Download Logs** in desktop.
 
 ## Bug Fixes
 
@@ -3188,7 +3188,7 @@
 ## Bug Fixes
 
 - **Auto-update restart** now launches the correct new version.
-- **Auth.json hot-reload** fixed for `grok login` in other terminals.
+- **Auth.json hot-reload** fixed for `fusion login` in other terminals.
 
 ## Performance
 
@@ -3205,7 +3205,7 @@
 ## Bug Fixes
 
 - **Auto-update restart** now launches the correct new version.
-- **Auth.json hot-reload** now detects `grok login` from other terminals.
+- **Auth.json hot-reload** now detects `fusion login` from other terminals.
 - **API error messages** no longer include request body for privacy.
 - **Status bar counting fixed**, **diff indentation preserved**, and **bash timeout** increased to 10 hours.
 - **Rate limit errors** now show friendly messages with **upgrade instructions**.
@@ -3233,7 +3233,7 @@
 ## Bug Fixes
 
 - **Auto-update restart** now launches the correct new version.
-- **Auth.json hot-reload** fixed for `grok login` in other terminals.
+- **Auth.json hot-reload** fixed for `fusion login` in other terminals.
 - **Fixed status bar counting**, **diff indentation**, and **increased bash timeout** to 10 hours.
 - **Rate limit errors** now show friendly messages with **upgrade instructions**.
 
@@ -3256,7 +3256,7 @@
 ## Bug Fixes
 
 - **Auto-update restart** now launches correct new version via symlink.
-- **External `grok login`** now hot-reloads auth without app restart.
+- **External `fusion login`** now hot-reloads auth without app restart.
 - **Fixed hangs** from broken streaming responses.
 - **Stale background tasks** now marked complete on session reload.
 - **MCP servers** loaded from `~/.claude.json` and `.mcp.json` files.
@@ -3294,7 +3294,7 @@
 ## Bug Fixes
 
 - **Auto-updates** now restart with the correct new version.
-- **Auth.json hot-reload** fixed for `grok login` in other terminals.
+- **Auth.json hot-reload** fixed for `fusion login` in other terminals.
 
 ## Performance
 
@@ -3310,7 +3310,7 @@
 ## Bug Fixes
 
 - **Auto-updates** now restart with the correct new version displayed.
-- **External `grok login`** now hot-reloads auth without restarting.
+- **External `fusion login`** now hot-reloads auth without restarting.
 
 ## Performance
 
@@ -3462,11 +3462,11 @@
 - **Startup announcements** emits x.ai/announcements/refreshed ACP notification on agent init.
 - **Auto-enroll updates** defaults to enabling automatic updates without interactive prompt.
 - **Subagent visualizations** in pager now show persona, role, and model metadata.
-- **Bundled agents** discovered from ~/.grok/bundled/agents/ with lowest precedence after project/user/built-in.
+- **Bundled agents** discovered from ~/.fusion/bundled/agents/ with lowest precedence after project/user/built-in.
 - **Pager welcome screen** displays rotated tip-of-the-day from RemoteSettings honoring config and env overrides.
 - **image_gen/video_gen tools** instruct model to display generated media inline via markdown.
 - **Project plugins** default disabled with enable via [plugins].enabled and added counts for UI.
-- **Enterprise managed configs** via ~/.grok/managed_config.toml/requirements.toml with `grok inspect` and `grok setup`.
+- **Enterprise managed configs** via ~/.fusion/managed_config.toml/requirements.toml with `grok inspect` and `fusion setup`.
 - **web_fetch tool** enabled via [features] web_fetch in config.toml alongside env/remote settings.
 - **grok login defaults to OAuth** instead of legacy relay; use --legacy or GROK_OAUTH_ENABLED=0 for old behavior.
 - **Clipboard copy over SSH/tmux** now reaches local terminal via OSC 52 alongside native clipboard writes.
@@ -3526,7 +3526,7 @@
 
 ## Features
 
-- **Per-hook enable/disable toggles** via ~/.grok/disabled-hooks file and 'e' key with **multi-line j/k navigation fix**.
+- **Per-hook enable/disable toggles** via ~/.fusion/disabled-hooks file and 'e' key with **multi-line j/k navigation fix**.
 - **Bash-mode execute blocks auto-expand** after completion to display output immediately.
 - **Video generation tool** supports xAI API with async polling, download and sequential MP4 naming.
 - **Marketplace plugin installs** route through git_install with provenance tracking.
@@ -3600,7 +3600,7 @@
 
 ## Breaking Changes
 
-- **OIDC OAuth replaces relay auth**; removed `--auth-signin-url`/`exchange-code-url`/`redirect-target` flags, run `grok login` to migrate.
+- **OIDC OAuth replaces relay auth**; removed `--auth-signin-url`/`exchange-code-url`/`redirect-target` flags, run `fusion login` to migrate.
 
 ## Features
 
@@ -3628,7 +3628,7 @@
 
 ## Features
 
-- **Configurable permission policies** enable automatic allow/deny rules via ~/.grok/config.toml before existing checks.
+- **Configurable permission policies** enable automatic allow/deny rules via ~/.fusion/config.toml before existing checks.
 - **Prevents timeout doom loops** by auto-backgrounding foreground commands exceeding default 120s without explicit timeout.
 - **ACP git extensions** enable desktop git info/branches/checkout without local shelling, supporting cloud workspaces.
 - **Richer hook annotations** add HTTP URL/status/response previews to scrollback for pre-tool-use summaries.
@@ -3660,7 +3660,7 @@
 
 ## Breaking Changes
 
-- **OIDC OAuth2 replaces legacy relay login** for `grok login`; add `--legacy` flag for old flow and remove `--auth-signin-url` etc. CLI flags (migrate by deleting auth.json).
+- **OIDC OAuth2 replaces legacy relay login** for `fusion login`; add `--legacy` flag for old flow and remove `--auth-signin-url` etc. CLI flags (migrate by deleting auth.json).
 - **Adds `grok login --legacy`** fallback; removes `--auth-signin-url` etc flags (use env/config defaults, no migration needed for most users).
 
 ## Features
@@ -3792,7 +3792,7 @@
 - **Claude frontmatter parity** parses allowed-tools lists/strings, model, and effort in skill frontmatter.
 - **Auto-injected managed MCPs** from grok.com for WebLogin, deduped with config.toml opt-out.
 - **ACP worktree management** adds list/show/gc/db methods with filters and dry-run.
-- **ACP x.ai/auth/logout** removes scopes from ~/.grok/auth.json.
+- **ACP x.ai/auth/logout** removes scopes from ~/.fusion/auth.json.
 - **Custom npm registry** via config.toml or GROK_NPM_REGISTRY respects enterprise.npmrc.
 - **CLI worktree commands use ACP** with repo-wide session resolution for -w -r.
 - **Repo-wide worktree session resume** resolves locally across same-repo directories via ACP before remote fallback.
@@ -3822,7 +3822,7 @@
 
 - **Subagent worktrees preserved** after completion with path in output; role-level fork and isolation defaults added.
 - **Always-approve mode** renames yolo flag/slash command with backward-compatible aliases preserved.
-- **Help skill reads ~/.grok/config.toml** to answer MCP server and model configuration queries.
+- **Help skill reads ~/.fusion/config.toml** to answer MCP server and model configuration queries.
 - **Deployment keys supported** on all API proxy endpoints including storage and sessions.
 - **Public install-grok.sh script** supports deployment keys and channels without VPN.
 - **Subagent prompts** use dedicated compact template with system role/persona.
@@ -3861,7 +3861,7 @@
 - **Structured subagent details and lineage** render diagnostics below selected TUI tasks rows.
 - **TUI /plugins commands** support live reload, qualified autocomplete, and plugin source display.
 - **Subagent safety guards** fallback to parent model on unknown config or fork context overflow.
-- **Bundled /help skill** extracts README.md to ~/.grok/ for slash command and model self-help.
+- **Bundled /help skill** extracts README.md to ~/.fusion/ for slash command and model self-help.
 - **Identifies worktree sessions** in client sidebars via session_kind and source_workspace_dir metadata in summary.json.
 
 ## Bug Fixes
@@ -3930,7 +3930,7 @@
 - **Plugin install/uninstall commands** support git repos, tags, subdirs, local paths.
 - **Auto-injects managed MCPs** from grok.com into CLI/TUI for WebLogin users.
 - **ACP worktree management** adds list/show/gc/db methods with filters and dry-run.
-- **ACP logout method** removes scopes from ~/.grok/auth.json.
+- **ACP logout method** removes scopes from ~/.fusion/auth.json.
 - **Discovers skills from.claude/skills** alongside.grok/skills across local, repo, and user directories.
 - **Inline TUI scrollback annotations** for hooks with ✓ success indicator and hashline_* Claude aliases.
 - **New hook events** Stop/Notification/UserPromptSubmit/SubagentStart/Stop with Claude-compatible PreToolUse schema.
@@ -4187,7 +4187,7 @@
 
 - **Doom-loop detection hardened** with whitespace-normalized fingerprints, per-file failure tracking, nearest-match hints, and outcome-aware error streaks.
 - **Restore no longer overwrites git identity** — synthetic commits use scoped env vars instead of writing to repo-local git config.
-- **Session token routing fixed** for default models — `grok login` users no longer get 400 errors on proxy-routed models.
+- **Session token routing fixed** for default models — `fusion login` users no longer get 400 errors on proxy-routed models.
 - **Richer API error diagnostics** with redacted headers, request body previews, and response metadata in failure messages.
 - **Worktree list preserves full IDs** by computing dynamic column width instead of truncating to 16 characters.
 - **Restored remote sessions create distinct local children** with parent tracking, preventing identity reuse and duplicate restores on repeated `grok -r`.
@@ -4309,7 +4309,7 @@
 - **Auto-installs grok-pager** alongside grok during internal and GitHub release updates.
 - **Mid-session token refresh** via OIDC grants or external auth binaries prevents expiry.
 - **Hashline toolset** enables anchor-stable file read/edit/grep with validation, recovery, ranges, and config integration.
-- **Hooks system** executes custom scripts for pre/post-tool and session events from ~/.grok/hooks/ with deny-wins trust controls.
+- **Hooks system** executes custom scripts for pre/post-tool and session events from ~/.fusion/hooks/ with deny-wins trust controls.
 - **Independent feedback flag** gates /feedback and popups separately from telemetry via GROK_FEEDBACK_ENABLED.
 - **Leader CLI** adds `grok leader list/info/profile/kill/dev` for discovery and CPU profiling.
 - **Plan mode state machine** enables agent planning phase with enter/exit tools and session persistence.
@@ -4622,7 +4622,7 @@
 - **PTY notifications reach the correct client** via _meta routing metadata, with shared helpers and session-aware cwd fallback.
 - **Concurrent tool calls no longer crash** the tools server; semaphore serializes access to the thread-local toolset.
 - **Cross-session notification leaks eliminated** in leader mode for relay, dead-client, and ext/notification routing paths.
-- **Leader auto-update pre-downloads the binary** before shutdown and resolves the ~/.grok/bin symlink at spawn time.
+- **Leader auto-update pre-downloads the binary** before shutdown and resolves the ~/.fusion/bin symlink at spawn time.
 - **First-compaction memory flush fires correctly** by pre-incrementing the compaction counter before the flush guard.
 - **Interval memory flush resumes after compaction** by resetting the conversation length counter when history is compacted.
 - **Session content restored on TUI reconnect** by clearing stale scrollback, resetting turn state, and gating live updates during replay.
@@ -4798,7 +4798,7 @@
 - **Accurate prompt re-rendering** now respects active tool overrides and disabled tools by centralizing all prompt assembly through a shared PromptContext.
 - **A/B cancellation no longer double-finishes comparisons** by suppressing completion notifications and after-uploads when cancel handlers already removed active comparison state.
 - **Running outside git repos no longer panics** by skipping gitignore construction without a repo root and guarding absolute-path ignore checks.
-- **npm installs now use a canonical Grok binary path** via postinstall copy to `~/.grok/bin/grok`, preventing installer conflicts and version confusion.
+- **npm installs now use a canonical Grok binary path** via postinstall copy to `~/.fusion/bin/grok`, preventing installer conflicts and version confusion.
 
 
 # 0.1.142

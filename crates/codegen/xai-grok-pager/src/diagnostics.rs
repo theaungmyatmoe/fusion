@@ -348,7 +348,7 @@ fn sandbox_profile_conflict_warning_from(conflicts: Vec<String>) -> Option<Termi
     Some(TerminalWarning {
         category: WarningCategory::SandboxProfileConflict,
         message: format!(
-            "Your project sandbox profile conflicts with user config.\nProfile: {profiles}\nProject config: .grok/sandbox.toml\nUser config: ~/.grok/sandbox.toml"
+            "Your project sandbox profile conflicts with user config.\nProfile: {profiles}\nProject config: .grok/sandbox.toml\nUser config: ~/.fusion/sandbox.toml"
         ),
         fix: Some("Using the user profile instead.".to_string()),
         config_path: None,
@@ -641,7 +641,7 @@ pub fn color_support_warning(
             None,
             None,
         );
-        warning.note = Some("Unset NO_COLOR and restart Grok.".to_string());
+        warning.note = Some("Unset NO_COLOR and restart Fusion.".to_string());
         return Some(warning);
     }
 
@@ -678,7 +678,7 @@ pub fn color_support_warning(
         Some("export COLORTERM=truecolor"),
         None,
     );
-    warning.note = Some("Persist in ~/.zshrc / ~/.bashrc and restart Grok.".to_string());
+    warning.note = Some("Persist in ~/.zshrc / ~/.bashrc and restart Fusion.".to_string());
     Some(warning)
 }
 

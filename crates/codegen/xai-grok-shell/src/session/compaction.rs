@@ -2871,11 +2871,11 @@ mod inline_auto_compact_flow_tests {
             SuppressReason::CreditBlock
         );
         assert_eq!(
-            classify("API error (status 402 Payment Required): Grok Build usage balance exhausted"),
+            classify("API error (status 402 Payment Required): Fusion usage balance exhausted"),
             SuppressReason::CreditBlock
         );
         assert_eq!(
-            classify("Grok Build usage limit reached"),
+            classify("Fusion usage limit reached"),
             SuppressReason::CreditBlock
         );
         assert_eq!(

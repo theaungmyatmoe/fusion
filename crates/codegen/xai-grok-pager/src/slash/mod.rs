@@ -2185,7 +2185,7 @@ mod tests {
     }
 
     /// Tier-restricted commands stay in the dropdown (discoverability) even
-    /// though `get()` blocks execution — invoking one shows the SuperGrok
+    /// though `get()` blocks execution — invoking one shows the Fusion
     /// upsell (covered by the dispatch-level tests).
     #[test]
     fn restricted_commands_stay_visible_in_dropdown() {

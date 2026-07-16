@@ -301,7 +301,7 @@ fn snapshot_worktree_to_ref_inner(
     message: &str,
 ) -> Result<String> {
     // Synthetic identity scoped to this call so it is never written to git config.
-    const NAME: &str = "Grok Snapshot";
+    const NAME: &str = "Fusion Snapshot";
     const EMAIL: &str = "grok-snapshot@example.com";
 
     // Stage against a throwaway index so the worktree's real index is untouched.

@@ -165,7 +165,7 @@ pub(crate) fn resolve_subscription_tier_for_telemetry(
 ///
 /// Post-unblock catalog refresh must not treat *any* present claim as enough:
 /// an older paid claim (e.g. `x_basic`) can remain on the access token while
-/// `/user` already reports a newly qualifying tier (e.g. `SuperGrokPro`). In
+/// `/user` already reports a newly qualifying tier (e.g. `FusionPro`). In
 /// that case `/v1/models` would still be targeted at the stale level (the
 /// "stale JWT tier skips retry" bug).
 pub(crate) fn jwt_claim_matches_user_subscription_tier(
@@ -177,8 +177,8 @@ pub(crate) fn jwt_claim_matches_user_subscription_tier(
         "XBasic" => jwt_claim == "x_basic",
         "XPremium" => jwt_claim == "x_premium",
         "XPremiumPlus" => jwt_claim == "x_premium_plus",
-        "SuperGrokPro" => jwt_claim == "supergrok_heavy",
-        "SuperGrokLite" => jwt_claim == "supergrok_lite",
+        "FusionPro" => jwt_claim == "supergrok_heavy",
+        "FusionLite" => jwt_claim == "supergrok_lite",
         _ => false,
     }
 }
@@ -2156,7 +2156,7 @@ impl MvpAgent {
     ///    initialize + cached_token + oidc fired in quick succession before
     ///    the first sync's tar extract finished), drop this call to avoid
     ///    racing concurrent extracts that would interleave per-file writes
-    ///    against `~/.grok/bundled/` and the manifest.
+    ///    against `~/.fusion/bundled/` and the manifest.
     pub(crate) fn maybe_sync_bundle_in_background(&self, force: bool) {
         use crate::extensions::bundle::{
             BUNDLE_SYNC_TTL, bundle_cache_is_fresh, has_bundle_credentials,

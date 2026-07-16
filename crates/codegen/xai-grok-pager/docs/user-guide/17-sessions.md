@@ -15,7 +15,7 @@ A session is a persistent conversation with full history. It includes:
 - Token usage and turn counts
 - Subagent sessions (when enabled)
 
-Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.grok/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.grok`.
+Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.fusion/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.fusion`.
 
 ---
 
@@ -24,7 +24,7 @@ Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it;
 Grok stores each session in its own directory, grouped by working directory. It URL-encodes the working directory to name the group. When the encoded name exceeds 255 bytes, it instead uses a slug plus a hash and records the original path in a `.cwd` file inside the group.
 
 ```
-~/.grok/sessions/<encoded-cwd>/<session-id>/
+~/.fusion/sessions/<encoded-cwd>/<session-id>/
   summary.json            # metadata: summary/title, timestamps, model ID, message counts
   updates.jsonl           # ACP session update stream (conversation + tool calls)
   chat_history.jsonl      # raw chat messages sent to the model
@@ -88,7 +88,7 @@ Resume a specific session by ID:
 grok --resume <session-id>
 ```
 
-Run `grok --resume` without an ID to resume the most recent session for the current directory.
+Run `fusion --resume` without an ID to resume the most recent session for the current directory.
 
 ### From the Welcome Screen
 

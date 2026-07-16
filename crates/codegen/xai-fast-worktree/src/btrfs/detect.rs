@@ -386,7 +386,7 @@ pub fn is_btrfs_subvolume(path: &Path) -> Result<Option<BtrfsInfo>> {
     //
     // A path like `/workspace/repo` can be a bind mount FROM a btrfs subvolume
     // at `/mnt/btrfs/repo`. In that case, statfs reports btrfs (because the data
-    // IS on btrfs), but the snapshot destination (e.g. `~/.grok/worktrees/...`)
+    // IS on btrfs), but the snapshot destination (e.g. `~/.fusion/worktrees/...`)
     // is NOT on btrfs. We need to detect the bind mount so we can create
     // snapshots inside the actual btrfs mount point and expose them at the
     // destination via a symlink.

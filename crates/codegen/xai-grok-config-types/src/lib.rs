@@ -636,7 +636,7 @@ pub struct RemoteSettings {
     pub sharing_enabled: Option<bool>,
     /// Voice mode (STT dictation). Client default is **on** when absent.
     /// `Some(false)` is a remote kill switch; `Some(true)` forces on.
-    /// Overridable locally via `GROK_VOICE_MODE`. Free-tier SuperGrok upsell
+    /// Overridable locally via `GROK_VOICE_MODE`. Free-tier Fusion upsell
     /// is a separate client tier gate.
     #[serde(default)]
     pub voice_mode_enabled: Option<bool>,
@@ -706,13 +706,13 @@ pub struct RemoteSettings {
     /// When `None` or `Some(false)`, sessions are shown in a flat list.
     #[serde(default)]
     pub session_picker_grouped: Option<bool>,
-    /// Whether the user is allowed to use Grok Build. Set by remote settings
+    /// Whether the user is allowed to use Fusion. Set by remote settings
     /// `grok_build_access_gate` targeting rules. `None` = no server response
     /// yet (client uses own fallback check). `Some(false)` = blocked.
     #[serde(default)]
     pub allow_access: Option<bool>,
     /// User-friendly display name for the current subscription tier
-    /// (e.g. "SuperGrok", "X Premium+", "Free", "API Key"). Set by CCP
+    /// (e.g. "Fusion", "X Premium+", "Free", "API Key"). Set by CCP
     /// from the JWT tier claim (OAuth) or credential kind (API key).
     /// Free/Invalid OAuth → `"Free"`; API keys → `"API Key"` (Mixpanel
     /// `api_key`, never free).

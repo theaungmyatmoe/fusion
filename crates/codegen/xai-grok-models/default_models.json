@@ -86,7 +86,7 @@
     },
     {
       "model": "grok-build",
-      "name": "Fusion Build",
+      "name": "Fusion",
       "description": "Best for advanced coding tasks",
       "context_window": 500000,
       "temperature": 0.7,

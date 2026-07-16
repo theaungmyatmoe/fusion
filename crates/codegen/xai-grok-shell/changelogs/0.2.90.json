@@ -81,7 +81,7 @@
   },
   {
     "category": "features",
-    "description": "You can now add a local directory as a plugin marketplace source with `grok plugin marketplace add`.",
+    "description": "You can now add a local directory as a plugin marketplace source with `fusion plugin marketplace add`.",
     "breaking_change": false
   },
   {

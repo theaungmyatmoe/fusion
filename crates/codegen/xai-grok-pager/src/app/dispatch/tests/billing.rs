@@ -107,7 +107,7 @@ fn credit_limit_retry_preserves_image_submission_state() {
 #[test]
 fn is_max_tier_positive_match() {
     assert!(is_max_tier(Some("supergrok_heavy")));
-    assert!(is_max_tier(Some("SuperGrok Heavy")));
+    assert!(is_max_tier(Some("Fusion Heavy")));
     assert!(is_max_tier(Some("SUPERGROK_HEAVY")));
 }
 
@@ -122,7 +122,7 @@ fn is_max_tier_non_max_and_unknown() {
 
 #[test]
 fn is_max_tier_handles_mixed_case_and_whitespace() {
-    assert!(is_max_tier(Some("SuperGrok_Heavy")));
+    assert!(is_max_tier(Some("Fusion_Heavy")));
     assert!(is_max_tier(Some("supergrok heavy")));
     assert!(is_max_tier(Some("SUPERGROK HEAVY")));
 }
@@ -257,7 +257,7 @@ fn upsell_non_max_unified_shows_buy_credits() {
     assert_eq!(q.options[1].label, "Buy more credits");
     assert_eq!(
         q.options[1].description,
-        "Purchase credits to keep using Grok Build"
+        "Purchase credits to keep using Fusion"
     );
 }
 
@@ -316,7 +316,7 @@ fn is_credit_limit_error_matches_legacy_403_and_pool_402() {
     assert!(is_credit_limit_error(Some(402), "anything"));
     assert!(is_credit_limit_error(
         None,
-        "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+        "API error (status 402 Payment Required): Fusion usage balance exhausted"
     ));
     assert!(is_credit_limit_error(
         None,
@@ -818,7 +818,7 @@ fn free_usage_upsell_shows_two_options_with_exact_labels() {
         qv.local_kind,
         Some(
             crate::views::question_view::LocalQuestionKind::FreeUsageUpsell {
-                source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
+                source: xai_grok_telemetry::events::FusionUpsell::FreeUsagePaywall,
             }
         )
     ));
@@ -826,13 +826,13 @@ fn free_usage_upsell_shows_two_options_with_exact_labels() {
     assert_eq!(q.question, "You hit your free usage limit.");
     let expected = [
         (
-            "Upgrade to SuperGrok",
+            "Upgrade to Fusion",
             "For everyday coding and productivity tasks",
             Some(UPSELL_URL_UPGRADE),
         ),
         (
-            "Upgrade to SuperGrok Heavy",
-            "Get the most out of Grok Build. Highest usage limits.",
+            "Upgrade to Fusion Heavy",
+            "Get the most out of Fusion. Highest usage limits.",
             Some(UPSELL_URL_UPGRADE),
         ),
     ];
@@ -918,7 +918,7 @@ fn free_usage_translate_local_submit_maps_options() {
     open_free_usage_upsell(agent, None);
     let mut qv = agent.question_view.take().unwrap();
     let kind = || LocalQuestionKind::FreeUsageUpsell {
-        source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
+        source: xai_grok_telemetry::events::FusionUpsell::FreeUsagePaywall,
     };
 
     for idx in [0, 1] {
@@ -932,7 +932,7 @@ fn free_usage_translate_local_submit_maps_options() {
 
 // ── Restricted-command upsell tests ─────────────────────────────────
 
-/// Submitting a tier-restricted command opens the two-option SuperGrok
+/// Submitting a tier-restricted command opens the two-option Fusion
 /// upsell and neither runs the command nor leaks the text to the model.
 #[test]
 fn restricted_command_submit_opens_two_option_upsell() {
@@ -961,16 +961,16 @@ fn restricted_command_submit_opens_two_option_upsell() {
         qv.local_kind,
         Some(
             crate::views::question_view::LocalQuestionKind::FreeUsageUpsell {
-                source: xai_grok_telemetry::events::SuperGrokUpsell::RestrictedCommand,
+                source: xai_grok_telemetry::events::FusionUpsell::RestrictedCommand,
             }
         )
     ));
     let q = &qv.questions[0];
-    assert_eq!(q.question, "Unlock all features with SuperGrok.");
+    assert_eq!(q.question, "Unlock all features with Fusion.");
     assert_eq!(q.options.len(), 2);
-    assert_eq!(q.options[0].label, "Upgrade to SuperGrok");
+    assert_eq!(q.options[0].label, "Upgrade to Fusion");
     assert_eq!(q.options[0].id.as_deref(), Some(UPSELL_URL_UPGRADE));
-    assert_eq!(q.options[1].label, "Upgrade to SuperGrok Heavy");
+    assert_eq!(q.options[1].label, "Upgrade to Fusion Heavy");
     assert_eq!(q.options[1].id.as_deref(), Some(UPSELL_URL_UPGRADE));
 }
 

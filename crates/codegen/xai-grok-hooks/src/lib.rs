@@ -6,7 +6,7 @@
 //! ## Overview
 //!
 //! This crate provides a minimal hooks system for Grok. Hooks are discovered
-//! from dedicated directories (`~/.grok/hooks/` and `<git-worktree-root>/.grok/hooks/`),
+//! from dedicated directories (`~/.fusion/hooks/` and `<git-worktree-root>/.grok/hooks/`),
 //! defined in JSON files (compatible settings format), and executed as child processes.
 //!
 //! ## v0 scope

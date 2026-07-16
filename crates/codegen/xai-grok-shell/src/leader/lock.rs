@@ -35,7 +35,7 @@ pub fn compute_ws_url_suffix(ws_url: &str) -> String {
 /// Env var that overrides the leader socket path (and, by extension, the lock
 /// path — the sibling `.lock`). Set by the `--leader-socket` flag, or exported
 /// directly. Lets a developer sandbox a leader instance away from the default
-/// `~/.grok/leader.sock` — e.g. run a local branch build's leader without
+/// `~/.fusion/leader.sock` — e.g. run a local branch build's leader without
 /// colliding with an installed stable leader on the same machine. Honored by
 /// BOTH the client (`connect_or_spawn`) and the leader (`run_leader`), and
 /// inherited by the spawned leader subprocess, so all parties bind the same

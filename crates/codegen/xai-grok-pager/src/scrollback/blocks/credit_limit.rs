@@ -1,7 +1,7 @@
 //! CreditLimitBlock — scrollback card shown when a max-tier user exhausts credits.
 //!
 //! Replaces the Q&A question modal for users already at the highest tier
-//! (SuperGrok Heavy). Instead of offering "Upgrade tier" + PAYG / buy-credits
+//! (Fusion Heavy). Instead of offering "Upgrade tier" + PAYG / buy-credits
 //! options in the question overlay, this block renders an inline card with a
 //! descriptive message and a link to the usage/billing page.
 

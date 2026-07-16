@@ -129,7 +129,7 @@ fn external_stream_gates_on_end_to_end() {
     let records = col::log_records(&collected);
     let harness = col::find_event(&collected, "grok_code.session_start")
         .expect("session_start must be present");
-    assert_eq!(harness.scope_name, "ai.xai.grok_code");
+    assert_eq!(harness.scope_name, "ai.fusion");
     assert_eq!(
         harness
             .resource

@@ -248,7 +248,7 @@ pub const CLIENT_MODE_HEADER: &str = "x-grok-client-mode";
 
 /// One-way latch: set to `"headless"` at startup by the non-TUI entry points
 /// (`run_single_turn` for `grok -p`, `run_headless_inner` for
-/// `grok agent [headless]`), `"interactive"` otherwise.
+/// `fusion agent [headless]`), `"interactive"` otherwise.
 static CLIENT_MODE: OnceLock<&'static str> = OnceLock::new();
 
 /// Mark this process as headless (single-prompt). No-op if already set.

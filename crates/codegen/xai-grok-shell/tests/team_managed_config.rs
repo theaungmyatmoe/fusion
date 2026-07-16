@@ -1394,7 +1394,7 @@ async fn lock_contention_does_not_fall_through_to_team() {
     assert_eq!(*count.lock().unwrap(), 1);
 }
 
-/// `grok setup` with config served but the lock held by another writer reports
+/// `fusion setup` with config served but the lock held by another writer reports
 /// Installed (the holder is persisting it), not NothingConfigured.
 #[tokio::test]
 #[serial]

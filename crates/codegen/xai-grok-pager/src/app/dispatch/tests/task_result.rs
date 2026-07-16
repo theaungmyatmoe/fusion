@@ -733,7 +733,7 @@ fn switch_to_non_reasoning_model_clears_persisted_effort() {
         .available
         .insert(
             model_id.clone(),
-            acp::ModelInfo::new(model_id.clone(), "Grok Build".to_string()),
+            acp::ModelInfo::new(model_id.clone(), "Fusion".to_string()),
         );
     app.agents
         .get_mut(&id)
@@ -973,12 +973,12 @@ fn same_agent_type_switch_no_modal() {
     let agent = app.agents.get_mut(&id).unwrap();
     agent.session.models.available.insert(
         model_a.clone(),
-        acp::ModelInfo::new(model_a.clone(), "Grok Build A".to_string()),
+        acp::ModelInfo::new(model_a.clone(), "Fusion A".to_string()),
     );
     agent.session.models.set_current(model_a, None);
     agent.session.models.available.insert(
         model_b.clone(),
-        acp::ModelInfo::new(model_b.clone(), "Grok Build B".to_string()),
+        acp::ModelInfo::new(model_b.clone(), "Fusion B".to_string()),
     );
     agent.session.model_switch_pending = true;
 
@@ -1552,7 +1552,7 @@ fn gate_refreshed_emits_check_subscription_on_gate_lift() {
     let mut app = test_app();
     // User starts gated (no subscription).
     app.gate = Some(xai_grok_shell::auth::GateInfo {
-        message: "SuperGrok subscription required".into(),
+        message: "Fusion subscription required".into(),
         url: Some("https://grok.com/supergrok".into()),
         label: Some("Subscribe".into()),
     });

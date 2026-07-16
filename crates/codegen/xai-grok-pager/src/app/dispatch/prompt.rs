@@ -1296,7 +1296,7 @@ pub(super) fn handle_prompt_response(
                 // title into the body automatically.
                 let notif_title = session_name
                     .map(|s| s.to_string())
-                    .unwrap_or_else(|| "Grok".into());
+                    .unwrap_or_else(|| "Fusion".into());
 
                 app.deferred_notification = Some((
                     NotificationEvent {

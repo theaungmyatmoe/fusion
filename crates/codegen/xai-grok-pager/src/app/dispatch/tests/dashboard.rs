@@ -1678,7 +1678,7 @@ fn dashboard_slash_restricted_command_upsells_via_toast() {
         .as_deref()
         .expect("restricted command must set the upsell toast");
     assert!(
-        toast.contains("/imagine") && toast.contains("SuperGrok"),
+        toast.contains("/imagine") && toast.contains("Fusion"),
         "toast must carry the upsell: {toast}"
     );
 }

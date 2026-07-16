@@ -111,7 +111,7 @@ fn external_stream_end_to_end() {
             for sl in &rl.scope_logs {
                 assert_eq!(
                     sl.scope.as_ref().map(|s| s.name.as_str()),
-                    Some("ai.xai.grok_code")
+                    Some("ai.fusion")
                 );
                 for record in &sl.log_records {
                     event_names.push(record.event_name.clone());

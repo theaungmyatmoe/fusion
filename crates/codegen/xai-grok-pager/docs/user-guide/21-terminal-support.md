@@ -1,6 +1,6 @@
 # Terminal Support and Troubleshooting
 
-Grok Build runs as a full-screen TUI. To draw the interface, it relies on terminal escape sequences for color, clipboard, mouse, and full-screen control. Some terminals, multiplexers, and SSH sessions handle these sequences differently.
+Fusion runs as a full-screen TUI. To draw the interface, it relies on terminal escape sequences for color, clipboard, mouse, and full-screen control. Some terminals, multiplexers, and SSH sessions handle these sequences differently.
 
 ## Quick Fixes
 
@@ -78,7 +78,7 @@ Detection has these limitations:
 
 **Cause**: `COLORTERM` not set or tmux not configured for 24-bit RGB.
 
-**Fix**: Apply the two settings above, then restart Grok.
+**Fix**: Apply the two settings above, then restart Fusion.
 
 **Verify**: Run `/terminal-setup`. Expect `color truecolor` and `themes all`. If `color` is `256` or `basic`, the issues section has the unlock fix.
 
@@ -125,7 +125,7 @@ This setting is off by default for security reasons. Without it, OSC 52 writes f
 
 **Fix**:
 - In Zellij or control mode, Grok intentionally runs inline (no alt screen).
-- Set `[terminal] alt_screen = "always"` in `~/.grok/pager.toml` to force fullscreen.
+- Set `[terminal] alt_screen = "always"` in `~/.fusion/pager.toml` to force fullscreen.
 - Use the CLI flag `--no-alt-screen` to disable alt-screen mode entirely (useful for debugging or when the alternate screen causes issues in your terminal).
 
 ### Problem: Zellij keybindings interfere with Grok (Ctrl+g, Ctrl+o, etc.)

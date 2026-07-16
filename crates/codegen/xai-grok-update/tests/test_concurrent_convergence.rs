@@ -7,9 +7,9 @@
 //! Production has three independent downloader paths that can race around a
 //! release:
 //!
-//! 1. TUI startup: `check_update_background` spawns a detached `grok update`
+//! 1. TUI startup: `check_update_background` spawns a detached `fusion update`
 //!    (the Ctrl+U path now adopts this child instead of spawning a second).
-//! 2. Explicit `grok update` (incl. the Ctrl+U fallback when there is no
+//! 2. Explicit `fusion update` (incl. the Ctrl+U fallback when there is no
 //!    live child).
 //! 3. Leader mode: the hourly checker runs `ensure_latest_on_disk`
 //!    in-process.
@@ -45,7 +45,7 @@ use common::{
 use xai_grok_update::auto_update::{ensure_latest_on_disk, install_internal_from_base, run_update};
 use xai_grok_update::version::installed_on_disk_version;
 
-/// Assert the active `~/.grok/bin/grok` resolves to the expected versioned
+/// Assert the active `~/.fusion/bin/grok` resolves to the expected versioned
 /// binary, actually runs, and has exactly the expected content (the content
 /// check is what catches a cross-racer temp-file corruption).
 fn assert_active_binary(home: &Path, version: &str, platform: &str, expected_content: &[u8]) {
@@ -185,7 +185,7 @@ async fn ensure_latest_downloads_once_then_converges_without_redownload() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Convergence: explicit `grok update` (the Ctrl+U fallback path) finds the
+// Convergence: explicit `fusion update` (the Ctrl+U fallback path) finds the
 // binary another process already installed and skips the download — while
 // still returning the target version so stale leaders get signalled.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +242,7 @@ async fn run_update_force_still_redownloads_when_disk_current() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Installer gating: the disk-version probe must only be trusted for
-// installers that actually maintain the managed `~/.grok/bin/grok` symlink
+// installers that actually maintain the managed `~/.fusion/bin/grok` symlink
 // (internal, gh-release). For npm, a symlink left over from a previous
 // internal install LIES about the npm install's version — and in the worst
 // direction (leftover "newer" than the registry) it would silently suppress
@@ -335,7 +335,7 @@ async fn disk_probe_preserves_prerelease_versions() {
 #[serial]
 async fn disk_probe_rejects_dangling_symlink() {
     // If the symlink survives but its target binary was deleted (manual
-    // ~/.grok/downloads cleanup), the probe must report None — otherwise
+    // ~/.fusion/downloads cleanup), the probe must report None — otherwise
     // every updater would claim "already up to date" forever while no
     // runnable binary exists, and nothing would ever repair the install.
     let home = test_home();

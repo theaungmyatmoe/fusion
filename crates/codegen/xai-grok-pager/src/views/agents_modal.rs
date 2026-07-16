@@ -124,7 +124,7 @@ pub enum AgentsModalOutcome {
         tab: AgentsTab,
     },
 }
-/// User-level vs project-level config files (`~/.grok` vs `{cwd}/.grok`).
+/// User-level vs project-level config files (`~/.fusion` vs `{cwd}/.grok`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConfigFileScope {
     #[default]
@@ -374,7 +374,7 @@ fn personas_from_bundle(bundle: &BundleState) -> Vec<PersonaDetail> {
             .collect()
     }
 }
-/// Union bundled personas with local `~/.grok/personas` and `{cwd}/.grok/personas`.
+/// Union bundled personas with local `~/.fusion/personas` and `{cwd}/.grok/personas`.
 ///
 /// Bundled names take precedence; local-only names are appended with scope tags.
 pub fn merge_persona_lists(bundle: &BundleState, cwd: &Path) -> Vec<PersonaDetail> {
@@ -552,7 +552,7 @@ pub fn create_persona_template(
 pub fn persona_path_is_deletable(path: &Path) -> bool {
     config_path_is_user_or_project(path, "personas")
 }
-/// Shared guard: canonical path under `~/.grok/{subdir}` or `{cwd}/.grok/{subdir}`, not bundled.
+/// Shared guard: canonical path under `~/.fusion/{subdir}` or `{cwd}/.grok/{subdir}`, not bundled.
 fn config_path_is_user_or_project(path: &Path, subdir: &str) -> bool {
     let Ok(canonical) = dunce::canonicalize(path) else {
         return false;

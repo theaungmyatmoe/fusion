@@ -1,7 +1,7 @@
 //! Agent definition file discovery.
 //!
 //! Searches `.grok/agents/` and `.claude/agents/` from cwd to repo root,
-//! then `~/.grok/agents/`, then `~/.claude/agents/`. Name-based dedup keeps
+//! then `~/.fusion/agents/`, then `~/.claude/agents/`. Name-based dedup keeps
 //! highest priority.
 
 use std::collections::HashMap;
@@ -123,7 +123,7 @@ fn merge_subagents(
     // the runtime spawn precedence in by_name_in_cwd():
     //   project > built-in > user > bundled
     //
-    // A user-level ~/.grok/agents/explore.md does NOT shadow built-in explore
+    // A user-level ~/.fusion/agents/explore.md does NOT shadow built-in explore
     // at spawn time, so it must not shadow it in the visible list either.
     // Otherwise: visible != callable (the guarantee would be broken).
     for def in discovered {
@@ -184,14 +184,14 @@ fn merge_subagents(
 ///
 /// Search order (highest priority first):
 /// 1. `.grok/agents/` walking from `cwd` up to repo root
-/// 2. `~/.grok/agents/` (user-level)
+/// 2. `~/.fusion/agents/` (user-level)
 /// 3. `~/.claude/agents/` (compat user-level)
-/// 4. `~/.grok/bundled/agents/` (bundled, lowest priority)
+/// 4. `~/.fusion/bundled/agents/` (bundled, lowest priority)
 ///
 /// Deduplicates by name — higher-priority definitions win.
 /// User-level agent directories in priority order: user grok agents, `.claude`
 /// compat agents, then bundled. `.grok` dirs resolve from `grok_home`
-/// (GROK_HOME-aware) plus the legacy literal `~/.grok` when GROK_HOME points
+/// (GROK_HOME-aware) plus the legacy literal `~/.fusion` when GROK_HOME points
 /// elsewhere; `.claude` resolves from `home`.
 pub(crate) fn user_agent_dirs(
     home: Option<&Path>,
@@ -787,7 +787,7 @@ mod tests {
             .count();
         assert_eq!(
             count, 1,
-            "no duplicate ~/.grok/agents when grok_home == ~/.grok"
+            "no duplicate ~/.fusion/agents when grok_home == ~/.fusion"
         );
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[test]
     fn test_merge_user_level_builtin_name_is_skipped() {
-        // A user-level (~/.grok/agents/) agent named "explore" should NOT shadow
+        // A user-level (~/.fusion/agents/) agent named "explore" should NOT shadow
         // the built-in — only project-level can do that.
         let discovered = vec![synthetic_agent(
             "explore",

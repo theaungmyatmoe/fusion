@@ -3,7 +3,7 @@
 //! This is the client/workspace half of the folder-trust gate: it scans a
 //! workspace for repo-local code-exec configs, resolves the pure trust
 //! [`decide`] precedence, prompts (MVP stderr), and reads/writes the durable
-//! [`crate::trust::TrustStore`] (`~/.grok/trusted_folders.toml`). The
+//! [`crate::trust::TrustStore`] (`~/.fusion/trusted_folders.toml`). The
 //! consume/gating half (the `DECISIONS` cache, `resolve_and_record`,
 //! `project_scope_allowed`, the loader filters) lives in `xai-grok-shell`.
 //!
@@ -110,7 +110,7 @@ pub fn decide_inputs_with_interactive(
         is_interactive,
         // An over-broad key (home / fs-root / non-absolute) can never be recorded
         // by the store, so decide() trusts it rather than prompt on a key that
-        // can't persist (Case 2: cwd IS $HOME, incl. the default `~/.grok`).
+        // can't persist (Case 2: cwd IS $HOME, incl. the default `~/.fusion`).
         key_recordable: !crate::trust::is_unsafe_trust_root(key),
     }
 }
@@ -183,7 +183,7 @@ fn feature_enabled_for_build(remote: Option<&RemoteSettings>, is_local_build: bo
 /// Persist an explicit `--trust` grant for `cwd`'s workspace so repo-local
 /// servers are honored on the next resolve. Done client-side because trust is
 /// durable: even when the agent runs in a separate leader process it reads the
-/// same `~/.grok/trusted_folders.toml`. Best-effort; a write failure is logged,
+/// same `~/.fusion/trusted_folders.toml`. Best-effort; a write failure is logged,
 /// not fatal.
 pub fn grant_folder_trust(cwd: &Path) {
     // Local/dev builds never gate, so there is nothing to grant: `--trust` is a

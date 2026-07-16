@@ -11,7 +11,7 @@
   },
   {
     "category": "fixes",
-    "description": "The legacy `agent` command is now kept in sync with `grok` after running `grok update`.",
+    "description": "The legacy `agent` command is now kept in sync with `grok` after running `fusion update`.",
     "breaking_change": false
   },
   {

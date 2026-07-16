@@ -331,7 +331,7 @@ pub(crate) fn parse_screen_mode(value: Option<&str>) -> Option<super::ScreenMode
 ///
 /// Reads **and removes** the variable so the override is truly one-shot: it
 /// must not linger in this process's environment where every spawned child
-/// (tool shells, workers, nested `grok` invocations) would inherit a forced
+/// (tool shells, workers, nested `fusion` invocations) would inherit a forced
 /// screen mode the user never asked for.
 ///
 /// When set, the returned mode **wins** over CLI flags (`--minimal`,

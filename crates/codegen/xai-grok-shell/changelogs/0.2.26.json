@@ -6,7 +6,7 @@
   },
   {
     "category": "fixes",
-    "description": "**API-key users** can now run `grok agent --leader` without forced interactive login or timeouts.",
+    "description": "**API-key users** can now run `fusion agent --leader` without forced interactive login or timeouts.",
     "breaking_change": false
   },
   {

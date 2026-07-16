@@ -51,7 +51,7 @@ impl crate::types::tool_metadata::ToolMetadata for TaskTool {
     }
 
     fn description_template(&self) -> &str {
-        // The Task tool description for Grok Build is *never* taken from here.
+        // The Task tool description for Fusion is *never* taken from here.
         // It is always supplied via `ToolConfig::with_description(...)` using
         // the dynamically built string from `build_task_description()` in
         // xai-grok-agent/src/builder.rs (HEADER + per-subagent blocks + FOOTER).

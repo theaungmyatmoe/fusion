@@ -41,7 +41,7 @@
   },
   {
     "category": "performance",
-    "description": "**`grok update`** downloads have a longer timeout.",
+    "description": "**`fusion update`** downloads have a longer timeout.",
     "breaking_change": false
   }
 ]

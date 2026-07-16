@@ -7,14 +7,14 @@ use crate::app::agent_view::AgentView;
 use crate::app::app_view::AppView;
 use crate::scrollback::block::RenderBlock;
 use std::time::Duration;
-use xai_grok_telemetry::events::{SuperGrokUpsell, SuperGrokUpsellClicked};
+use xai_grok_telemetry::events::{FusionUpsell, FusionUpsellClicked};
 use xai_grok_telemetry::session_ctx::log_event;
 
 /// How long the pager auto-checks subscription status before stopping.
 /// After this, the user can still manually check via the [Refresh] button.
 pub(super) const PAYWALL_AUTO_CHECK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// Whether the user is at the highest subscription tier (SuperGrok Heavy).
+/// Whether the user is at the highest subscription tier (Fusion Heavy).
 ///
 /// Returns `true` only when `subscription_tier` **positively matches** a
 /// known max-tier identifier. When the tier is unknown (`None`) or any
@@ -25,7 +25,7 @@ pub(super) fn is_max_tier(subscription_tier: Option<&str>) -> bool {
         return false; // Unknown — default to Q&A.
     };
     // Normalize: lowercase + spaces→underscores to match both JWT-derived
-    // keys ("supergrok_heavy") and CCP display names ("SuperGrok Heavy").
+    // keys ("supergrok_heavy") and CCP display names ("Fusion Heavy").
     t.to_ascii_lowercase().replace(' ', "_") == "supergrok_heavy"
 }
 
@@ -112,7 +112,7 @@ pub(crate) fn acp_error_is_free_usage_exhausted(err: &agent_client_protocol::Err
 /// User-facing message for free-usage exhaustion. Shown by headless mode and
 /// `format_acp_error` in place of auth-aware rate-limit copy. Deliberately
 /// promises no reset duration — the quota window is backend-config-driven.
-pub(crate) const FREE_USAGE_USER_MESSAGE: &str = "You\u{2019}ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build";
+pub(crate) const FREE_USAGE_USER_MESSAGE: &str = "You\u{2019}ve reached your free Fusion usage limit for now. Get Fusion for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build";
 
 /// Open the credit-limit upsell on the given agent.
 ///
@@ -120,7 +120,7 @@ pub(crate) const FREE_USAGE_USER_MESSAGE: &str = "You\u{2019}ve reached your fre
 /// two options ("Upgrade tier" + buy-credits or PAYG). Each option's `id`
 /// carries the target URL so the submit handler is position-independent.
 ///
-/// **`max_tier = true`** (positively identified as SuperGrok Heavy):
+/// **`max_tier = true`** (positively identified as Fusion Heavy):
 /// pushes an inline scrollback card (`CreditLimitBlock`) with a single
 /// continue action. No Q&A modal — the user can't upgrade further.
 pub(super) fn open_credit_limit_upsell(
@@ -151,7 +151,7 @@ pub(super) fn open_credit_limit_upsell(
             "You hit your weekly limit.",
             "Upgrade to a higher tier for more usage",
             "Buy more credits",
-            "Purchase credits to keep using Grok Build",
+            "Purchase credits to keep using Fusion",
             CreditLimitCardAction::PurchaseCredits,
             xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
             false,
@@ -255,12 +255,12 @@ pub(super) fn open_credit_limit_upsell(
 ///
 /// Driver-only by construction (called from the PromptResponse handler,
 /// which viewers never receive). `auth_method` feeds the
-/// `SuperGrokUpsellShown` funnel event.
+/// `FusionUpsellShown` funnel event.
 pub(super) fn open_free_usage_upsell(agent: &mut AgentView, auth_method: Option<String>) {
     open_supergrok_upsell(agent, UpsellReason::FreeUsageLimit, auth_method);
 }
 
-/// Open the SuperGrok upsell for a tier-restricted slash command
+/// Open the Fusion upsell for a tier-restricted slash command
 /// (`/usage`, `/imagine`, …). Returns whether the modal opened (`false`
 /// when another question modal is already up) so the caller can decide
 /// whether to consume the input that triggered it.
@@ -271,7 +271,7 @@ pub(super) fn open_restricted_command_upsell(
     open_supergrok_upsell(agent, UpsellReason::RestrictedCommand, auth_method)
 }
 
-/// Which situation opened the SuperGrok upsell modal. Controls the heading
+/// Which situation opened the Fusion upsell modal. Controls the heading
 /// and the telemetry source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpsellReason {
@@ -304,31 +304,31 @@ fn open_supergrok_upsell(
     let (heading, source, modal_id_prefix) = match reason {
         UpsellReason::FreeUsageLimit => (
             "You hit your free usage limit.",
-            SuperGrokUpsell::FreeUsagePaywall,
+            FusionUpsell::FreeUsagePaywall,
             "free-usage-upsell",
         ),
         UpsellReason::RestrictedCommand => (
-            "Unlock all features with SuperGrok.",
-            SuperGrokUpsell::RestrictedCommand,
+            "Unlock all features with Fusion.",
+            FusionUpsell::RestrictedCommand,
             "restricted-command-upsell",
         ),
     };
 
-    log_event(xai_grok_telemetry::events::SuperGrokUpsellShown {
+    log_event(xai_grok_telemetry::events::FusionUpsellShown {
         source,
         auth_method,
     });
 
     let options = vec![
         QuestionOption {
-            label: "Upgrade to SuperGrok".into(),
+            label: "Upgrade to Fusion".into(),
             description: "For everyday coding and productivity tasks".into(),
             preview: None,
             id: Some(UPSELL_URL_UPGRADE.into()),
         },
         QuestionOption {
-            label: "Upgrade to SuperGrok Heavy".into(),
-            description: "Get the most out of Grok Build. Highest usage limits.".into(),
+            label: "Upgrade to Fusion Heavy".into(),
+            description: "Get the most out of Fusion. Highest usage limits.".into(),
             preview: None,
             // No Heavy-specific URL exists; the /supergrok page lists
             // both plans, so both upgrade options land there.
@@ -562,8 +562,8 @@ pub(super) fn handle_credit_limit_recheck_complete(
 // Action handlers.
 
 pub(super) fn dispatch_open_supergrok_url(app: &mut AppView) -> Vec<Effect> {
-    log_event(SuperGrokUpsellClicked {
-        source: SuperGrokUpsell::WelcomeScreen,
+    log_event(FusionUpsellClicked {
+        source: FusionUpsell::WelcomeScreen,
         auth_method: app.login_method_id.as_ref().map(|id| id.0.to_string()),
     });
     let url = app
@@ -571,7 +571,7 @@ pub(super) fn dispatch_open_supergrok_url(app: &mut AppView) -> Vec<Effect> {
         .as_ref()
         .and_then(|g| g.url.as_deref())
         .unwrap_or("https://grok.com/supergrok?referrer=grok-build");
-    // Funnel attribution: tag CLI-originated SuperGrok upsell clicks
+    // Funnel attribution: tag CLI-originated Fusion upsell clicks
     // with `referrer=grok-build`, matching the OAuth consent flow and
     // x.ai/cli marketing links. Applied even when the URL came from
     // remote settings's `gate_url`, so we don't depend on the remote flag

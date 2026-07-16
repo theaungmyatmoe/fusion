@@ -1211,7 +1211,7 @@ impl MvpAgent {
     /// Whether the current session is a personal grok.com account on a gated
     /// tier (free / X Basic). The Imagine tools stay advertised to the model but
     /// are flagged tier-restricted so they short-circuit at call time with the
-    /// SuperGrok upsell prose (see `ImageGenConfig`/`VideoGenConfig`'s
+    /// Fusion upsell prose (see `ImageGenConfig`/`VideoGenConfig`'s
     /// `tier_restricted`).
     ///
     /// Fails **open** (returns `false`) whenever we can't positively confirm a

@@ -21,7 +21,7 @@ pub struct HeadlessResult {
 
 const HEADLESS_TIMEOUT_SECS: u64 = 60;
 
-/// Run `grok` with the given args against the mock server, with a 60s timeout.
+/// Run `fusion` with the given args against the mock server, with a 60s timeout.
 /// Uses an isolated HOME and disables telemetry.
 pub async fn run_headless(
     server: &MockInferenceServer,

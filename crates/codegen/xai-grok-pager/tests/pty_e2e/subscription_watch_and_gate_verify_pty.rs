@@ -9,10 +9,10 @@ use super::common::*;
 const GATE_MSG: &str = "ZZSUBGATEMSG";
 
 /// A tier in the shell's `QUALIFYING_TIERS` list.
-const PAID_TIER: &str = "SuperGrokPro";
+const PAID_TIER: &str = "FusionPro";
 
 /// Display name delivered via `/settings` `subscription_tier_display`.
-const PAID_TIER_DISPLAY: &str = "SuperGrok Pro";
+const PAID_TIER_DISPLAY: &str = "Fusion Pro";
 
 /// Count of live subscription checks the client made against the mock
 /// (`GET /v1/user?include=subscription`). Plain `/v1/user` enrichment
@@ -52,7 +52,7 @@ const PAID_ONLY_MODEL: &str = "composer-paid-only";
 /// Minimal unsigned JWT with a `tier` claim matching [`PAID_TIER`].
 ///
 /// Proto `prod_auth.SubscriptionTier`: 5 = `supergrok_heavy` = live
-/// `/user` string `SuperGrokPro`. Must match
+/// `/user` string `FusionPro`. Must match
 /// `jwt_claim_matches_user_subscription_tier` or post-unblock catalog
 /// refresh treats the claim as stale and never re-fetches `/v1/models`
 /// within the test timeout.

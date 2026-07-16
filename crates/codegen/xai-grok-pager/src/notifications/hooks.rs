@@ -94,7 +94,7 @@ mod tests {
     fn test_event() -> NotificationEvent {
         NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: "Grok".into(),
+            title: "Fusion".into(),
             body: "test body payload".into(),
             session_id: Some("test-session-123".into()),
         }
@@ -106,7 +106,7 @@ mod tests {
         let out = dir.path().join("env.txt");
         let command = format!(
             "printf 'GROK_EVENT=%s\\nGROK_MESSAGE=%s\\nGROK_SESSION_ID=%s\\n' \
-             \"$GROK_EVENT\" \"$GROK_MESSAGE\" \"$GROK_SESSION_ID\" > {}",
+             \"$GROK_EVENT\" \"$FUSION_MESSAGE\" \"$GROK_SESSION_ID\" > {}",
             out.display()
         );
 
@@ -258,7 +258,7 @@ mod tests {
         let hook = NotificationHook {
             command: format!(
                 "printf 'GROK_EVENT=%s\\nGROK_MESSAGE=%s\\nGROK_SESSION_ID=%s\\n' \
-                 \"$GROK_EVENT\" \"$GROK_MESSAGE\" \"$GROK_SESSION_ID\" > {}",
+                 \"$GROK_EVENT\" \"$FUSION_MESSAGE\" \"$GROK_SESSION_ID\" > {}",
                 out.display()
             ),
             events: vec![],

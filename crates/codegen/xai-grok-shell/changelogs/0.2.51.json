@@ -1,7 +1,7 @@
 [
   {
     "category": "breaking",
-    "description": "**`grok mcp add`** now accepts positional arguments (e.g. `grok mcp add filesystem -- npx ...`), supports --scope project, and adds -e/-H flags for env/headers.",
+    "description": "**`fusion mcp add`** now accepts positional arguments (e.g. `fusion mcp add filesystem -- npx ...`), supports --scope project, and adds -e/-H flags for env/headers.",
     "breaking_change": true
   },
   {
@@ -16,7 +16,7 @@
   },
   {
     "category": "fixes",
-    "description": "**`grok update`** no longer downloads the same binary twice when multiple updaters or leader checks run concurrently.",
+    "description": "**`fusion update`** no longer downloads the same binary twice when multiple updaters or leader checks run concurrently.",
     "breaking_change": false
   },
   {

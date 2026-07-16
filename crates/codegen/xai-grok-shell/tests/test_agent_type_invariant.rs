@@ -9,7 +9,7 @@
 //! - Same-type model switching (no rebuild)
 //! - Session resume
 //!
-//! Each test spawns a real `grok agent stdio` process, speaks the full ACP
+//! Each test spawns a real `fusion agent stdio` process, speaks the full ACP
 //! protocol, and asserts on the inference request bodies (system prompt) and
 //! stderr tracing output to verify the correct harness was used.
 //!
@@ -79,7 +79,7 @@ async fn test_default_model_uses_grok_build_harness() {
             .last_system_prompt()
             .expect("should have at least one inference request");
         assert!(
-            sys_prompt.contains("Grok") || sys_prompt.contains("grok"),
+            sys_prompt.contains("Fusion") || sys_prompt.contains("fusion") || sys_prompt.contains("Fusion AI"),
             "default model should use grok-build harness\nsystem prompt preview: {}",
             &sys_prompt[..sys_prompt.len().min(500)]
         );
@@ -154,9 +154,9 @@ async fn test_session_resume_preserves_harness() {
             .last_system_prompt()
             .expect("should have captured resumed system prompt");
         let original_has_grok =
-            original_sys_prompt.contains("Grok") || original_sys_prompt.contains("grok");
+            original_sys_prompt.contains("Fusion") || original_sys_prompt.contains("fusion");
         let resumed_has_grok =
-            resumed_sys_prompt.contains("Grok") || resumed_sys_prompt.contains("grok");
+            resumed_sys_prompt.contains("Fusion") || resumed_sys_prompt.contains("fusion");
         assert_eq!(
             original_has_grok,
             resumed_has_grok,
@@ -194,7 +194,7 @@ async fn test_model_without_agent_type_defaults_to_grok_build() {
                 .last_system_prompt()
                 .expect("should have at least one inference request");
             assert!(
-                sys_prompt.contains("Grok") || sys_prompt.contains("grok"),
+                sys_prompt.contains("Fusion") || sys_prompt.contains("fusion") || sys_prompt.contains("Fusion AI"),
                 "model without agent_type should default to grok-build harness\nsystem prompt preview: {}",
                 & sys_prompt[..sys_prompt.len().min(500)]
             );
@@ -334,7 +334,7 @@ async fn test_grok_agent_env_overrides_model_agent_type() {
                 .last_system_prompt()
                 .expect("should have inference request");
             assert!(
-                sys_prompt.contains("Grok") || sys_prompt.contains("grok"),
+                sys_prompt.contains("Fusion") || sys_prompt.contains("fusion") || sys_prompt.contains("Fusion AI"),
                 "GROK_AGENT=grok-build should override cursor model's agent_type\nsystem prompt preview: {}",
                 & sys_prompt[..sys_prompt.len().min(500)]
             );

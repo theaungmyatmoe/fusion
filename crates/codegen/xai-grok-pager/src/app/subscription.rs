@@ -259,7 +259,7 @@ mod tests {
         assert!(app.may_be_free_tier());
         app.subscription_tier = Some(" FREE ".into());
         assert!(app.may_be_free_tier(), "case/whitespace-insensitive");
-        app.subscription_tier = Some("SuperGrok Heavy".into());
+        app.subscription_tier = Some("Fusion Heavy".into());
         assert!(!app.may_be_free_tier());
         app.subscription_tier = Some("X Premium".into());
         assert!(!app.may_be_free_tier());
@@ -276,7 +276,7 @@ mod tests {
         app.subscription_tier = Some("Free".into());
         assert!(app.subscription_watch_wanted(), "free tier watches");
 
-        app.subscription_tier = Some("SuperGrok".into());
+        app.subscription_tier = Some("Fusion".into());
         assert!(!app.subscription_watch_wanted(), "paid tier is dormant");
 
         // Gated — watches regardless of the (stale) tier string.
@@ -361,7 +361,7 @@ mod tests {
         );
 
         let mut paid = test_app();
-        paid.subscription_tier = Some("SuperGrok".into());
+        paid.subscription_tier = Some("Fusion".into());
         assert!(
             paid.fire_subscription_check("watch").is_empty(),
             "paid tier never fires"

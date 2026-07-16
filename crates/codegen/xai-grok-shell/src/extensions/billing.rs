@@ -1,6 +1,6 @@
 //! `x.ai/billing` extension handler.
 //!
-//! Fetches the authenticated user's Grok Build billing configuration
+//! Fetches the authenticated user's Fusion billing configuration
 //! (credit limit, usage, on-demand cap, billing period, history) from
 //! the backend. Used by the pager/desktop to display credits and usage.
 
@@ -57,7 +57,7 @@ pub struct BillingPeriodUsage {
     pub total_used: Option<Cent>,
 }
 
-/// Current billing configuration for Grok Build coding credits.
+/// Current billing configuration for Fusion coding credits.
 ///
 /// Carries both the newer credits-config fields (`credit_usage_percent`,
 /// `current_period`) and the deprecated `GrokBuildBillingConfig` fields
@@ -116,7 +116,7 @@ pub struct BillingConfigResponse {
     /// should hide on-demand controls. Populated from `RemoteSettings`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_demand_enabled: Option<bool>,
-    /// User-friendly subscription tier name (e.g. "SuperGrok Heavy").
+    /// User-friendly subscription tier name (e.g. "Fusion Heavy").
     /// Populated from `RemoteSettings` so the pager can update its cached
     /// tier on every billing fetch without an extra request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,7 +162,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 
 /// Structured context for unified-log entries from a successful billing fetch.
 ///
-/// Keeps history to a count + the most recent period so `~/.grok/logs/unified.jsonl`
+/// Keeps history to a count + the most recent period so `~/.fusion/logs/unified.jsonl`
 /// stays useful without dumping unbounded period arrays.
 fn billing_unified_log_ctx(billing: &BillingConfigResponse) -> serde_json::Value {
     let history_len = billing
@@ -201,7 +201,7 @@ async fn handle_get_billing(agent: &MvpAgent) -> ExtResult {
     let auth = super::auth_gate::require_xai_auth(
         &agent.auth_manager,
         "Authentication required to fetch billing data",
-        "Billing data requires auth with grok.com. Run `grok login` to authenticate.",
+        "Billing data requires auth with Fusion. Run `fusion login` to authenticate.",
     )?;
 
     let proxy_base = agent.cli_chat_proxy_base_url();
@@ -292,7 +292,7 @@ async fn handle_get_auto_topup_rule(agent: &MvpAgent) -> ExtResult {
     let auth = super::auth_gate::require_xai_auth(
         &agent.auth_manager,
         "Authentication required to fetch auto top-up rule",
-        "Auto top-up data requires auth with grok.com. Run `grok login` to authenticate.",
+        "Auto top-up data requires auth with Fusion. Run `fusion login` to authenticate.",
     )?;
 
     let proxy_base = agent.cli_chat_proxy_base_url();
@@ -442,11 +442,11 @@ mod tests {
                 ],
             }),
             on_demand_enabled: Some(true),
-            subscription_tier: Some("SuperGrok".into()),
+            subscription_tier: Some("Fusion".into()),
         };
         let ctx = billing_unified_log_ctx(&resp);
         assert_eq!(ctx["onDemandEnabled"], true);
-        assert_eq!(ctx["subscriptionTier"], "SuperGrok");
+        assert_eq!(ctx["subscriptionTier"], "Fusion");
         let config = ctx["config"].as_object().expect("config object");
         assert!(
             config.get("history").is_none(),

@@ -159,7 +159,7 @@ fn callback_response(result: &CallbackResult) -> (StatusCode, Html<String>) {
     let (title, message) = match result {
         Ok(_) => (
             "Signed in",
-            "You can close this window and return to Grok Build.",
+            "You can close this window and return to Fusion.",
         ),
         Err(_) => ("Access denied", "Close this window and try again."),
     };
@@ -427,7 +427,7 @@ pub async fn run_login_flow_with_config(
         // No client UI — print to stderr.
         eprintln!();
         let provider_label = if oidc.issuer == super::super::config::XAI_OAUTH2_ISSUER {
-            "Grok".to_owned()
+            "Fusion".to_owned()
         } else {
             oidc.issuer.clone()
         };

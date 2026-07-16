@@ -22,7 +22,7 @@ pub const MAX_SKILL_WALK_DEPTH: usize = 5;
 ///
 /// `skills` is the standard layout (`.grok/skills/`, `.claude/skills/`,
 /// `.cursor/skills/`). The product-specific `skills-cursor/` layout is no
-/// longer scanned — it pulled vendor default skills into Grok Build sessions.
+/// longer scanned — it pulled vendor default skills into Fusion sessions.
 const SKILL_SUBDIRS: &[&str] = &["skills"];
 
 /// Cursor ships these default skills in `~/.cursor/skills-cursor/`
@@ -56,7 +56,7 @@ const CLAUDE_DEFAULT_SKILLS: &[&str] = &["pdf", "docx", "xlsx", "pptx", "skill-c
 /// matching vendor's config dir (`/.cursor/` or `/.claude/`).
 ///
 /// The path check ensures a user's own skill that merely shares a denylisted
-/// name (e.g. `~/.grok/skills/shell`) is NOT dropped — only skills physically
+/// name (e.g. `~/.fusion/skills/shell`) is NOT dropped — only skills physically
 /// located under the vendor dir are treated as vendor builtins.
 fn is_vendor_default_skill(path: &str, name: &str) -> bool {
     let in_cursor = path.contains("/.cursor/") || path.contains("\\.cursor\\");
@@ -815,7 +815,7 @@ pub fn parse_skill_files(skill_files: Vec<(PathBuf, SkillScope)>) -> Vec<SkillIn
 
     // Drop vendor-shipped default skills (vendor builtins) found under
     // a `/.cursor/` or `/.claude/` path. Always applied, independent of the
-    // per-vendor toggle, so vendor builtins never leak into Grok Build.
+    // per-vendor toggle, so vendor builtins never leak into Fusion.
     skills.retain(|s| !is_vendor_default_skill(&s.path, &s.name));
 
     skills
@@ -1431,7 +1431,7 @@ model: test-model
 
     #[test]
     fn is_vendor_default_skill_spares_user_skill_outside_vendor_dir() {
-        // A user's own "shell" skill in ~/.grok is NOT a vendor builtin.
+        // A user's own "shell" skill in ~/.fusion is NOT a vendor builtin.
         assert!(!is_vendor_default_skill(
             "/home/u/.grok/skills/shell/SKILL.md",
             "shell"

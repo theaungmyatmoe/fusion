@@ -125,7 +125,7 @@ pub(crate) fn log_model_override_warnings(warnings: &[ModelOverrideWarning]) {
     if !warnings.is_empty() {
         tracing::warn!(
             warnings = warnings.len(),
-            "model_override: parsed with warnings; run `grok inspect` for details"
+            "model_override: parsed with warnings; run `fusion inspect` for details"
         );
     }
 }

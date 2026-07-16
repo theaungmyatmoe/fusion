@@ -210,7 +210,7 @@ mod tests {
 
     /// The pre-delegation mock always served 200 `{"allow_access": true}`;
     /// the shared server defaults to 404-until-set. A 404 strands the pager
-    /// on the SuperGrok upsell screen and breaks every PTY test.
+    /// on the Fusion upsell screen and breaks every PTY test.
     #[tokio::test]
     async fn settings_endpoint_allows_access_by_default() {
         let content = ContentController::start().await.unwrap();

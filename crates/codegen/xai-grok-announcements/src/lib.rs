@@ -126,7 +126,7 @@ pub fn prune_hidden_announcement_ids(
     ids.len() != before
 }
 
-/// Read hidden announcement ids from `~/.grok/announcements.json`.
+/// Read hidden announcement ids from `~/.fusion/announcements.json`.
 /// Returns an empty set (everything visible) on missing or malformed file.
 pub async fn read_hidden_announcement_ids() -> BTreeSet<String> {
     let path = announcements_state_path();
@@ -136,7 +136,7 @@ pub async fn read_hidden_announcement_ids() -> BTreeSet<String> {
     }
 }
 
-/// Write hidden announcement ids to `~/.grok/announcements.json`.
+/// Write hidden announcement ids to `~/.fusion/announcements.json`.
 pub async fn write_hidden_announcement_ids(ids: &BTreeSet<String>) {
     let path = announcements_state_path();
     if let Some(s) = serialize_hidden_announcement_ids(ids) {
@@ -303,11 +303,11 @@ mod tests {
     #[test]
     fn cta_parses_nested_partial_and_absent() {
         let full: RemoteAnnouncement = serde_json::from_str(
-            r#"{"id":"p","severity":"promo","cta":{"label":"Get SuperGrok","url":"https://x.ai/grok","caption":"or use Ctrl+O"}}"#,
+            r#"{"id":"p","severity":"promo","cta":{"label":"Get Fusion","url":"https://x.ai/grok","caption":"or use Ctrl+O"}}"#,
         )
         .unwrap();
         let cta = full.cta.as_ref().expect("cta present");
-        assert_eq!(cta.label.as_deref(), Some("Get SuperGrok"));
+        assert_eq!(cta.label.as_deref(), Some("Get Fusion"));
         assert_eq!(cta.url.as_deref(), Some("https://x.ai/grok"));
         assert_eq!(cta.caption.as_deref(), Some("or use Ctrl+O"));
 

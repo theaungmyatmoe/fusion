@@ -221,7 +221,7 @@ async fn old_client_adopts_new_leader_and_still_functions() {
         .await;
 }
 
-/// `grok update`'s relaunch signal against a REAL old leader: connect,
+/// `fusion update`'s relaunch signal against a REAL old leader: connect,
 /// require `relaunch_v1`, send `RelaunchForUpdate`, and the leader exits so
 /// the surviving client re-elects. Mirrors the private
 /// `signal_leaders_to_relaunch` in `xai-grok-pager-bin/src/main.rs` (which is

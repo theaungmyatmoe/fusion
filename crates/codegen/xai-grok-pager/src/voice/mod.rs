@@ -4,7 +4,7 @@
 //! - **Voice gate** — GA default **on**. Remote `voice_mode_enabled: false` is
 //!   a kill switch (every voice surface unavailable and silent — no toast).
 //!   Absent remote falls through to on. `GROK_VOICE_MODE` overrides for local
-//!   dev (env > remote > default on). Free/X Basic still get SuperGrok upsell
+//!   dev (env > remote > default on). Free/X Basic still get Fusion upsell
 //!   via tier gates (not this flag).
 //! - **Session mode** (`voice_ui_active`) — this CLI run only; shows the mic.
 //! - **Capture chord** — `/voice` or `Ctrl+Space` start dictation (Esc/Enter

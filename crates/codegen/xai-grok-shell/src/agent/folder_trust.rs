@@ -49,9 +49,9 @@ use xai_grok_workspace::folder_trust::{
 use crate::session::managed_mcp::mcp_server_name;
 use crate::util::config::{MCP_SCOPE_PROJECT, RemoteSettings};
 
-// NOTE: this folder-trust store (`~/.grok/trusted_folders.toml`) is SEPARATE
+// NOTE: this folder-trust store (`~/.fusion/trusted_folders.toml`) is SEPARATE
 // from the pre-existing per-plugin trust store
-// (`xai_grok_agent::plugins::TrustStore` at `~/.grok/trusted-plugins`, plus the
+// (`xai_grok_agent::plugins::TrustStore` at `~/.fusion/trusted-plugins`, plus the
 // hooks' own project-trust gating). Trusting a folder here does NOT imply plugin
 // trust and vice versa; the two are independent and non-contradicting.
 // Unifying them is a tracked follow-up (out of scope for this PR).
@@ -226,7 +226,7 @@ pub(crate) fn record_for_test(cwd: &Path, allowed: bool) {
 /// `allow_prompt` must be `true` ONLY where a blocking stdin y/N read is safe —
 /// i.e. agent `initialize` for the launch directory, before the TUI takes over
 /// the terminal. Every other call site (per-session cwd, leader-served sessions
-/// whose cwd differs from the launch dir, `grok mcp doctor`) passes `false`, so
+/// whose cwd differs from the launch dir, `fusion mcp doctor`) passes `false`, so
 /// an unresolved interactive-but-untrusted workspace resolves **fail-closed**
 /// (untrusted, no prompt) — only the launch dir is ever prompted for.
 pub fn resolve_and_record(cwd: &Path, remote: Option<&RemoteSettings>, allow_prompt: bool) -> bool {
@@ -389,7 +389,7 @@ fn compute_from_inputs(
 /// merged server list when the workspace is untrusted.
 ///
 /// SINGLE SOURCE OF TRUTH for "project-scoped MCP names" across ALL gate sites
-/// (session merge, the session-less agent pool, `grok mcp doctor`). It MUST
+/// (session merge, the session-less agent pool, `fusion mcp doctor`). It MUST
 /// enumerate every project MCP source the loaders read; adding a new repo-local
 /// MCP source without extending this fn silently re-opens the gate (guarded by
 /// `project_scoped_mcp_names_cover_every_source`).
@@ -404,7 +404,7 @@ fn compute_from_inputs(
 /// project `.cursor/mcp.json`, and `~/.claude.json projects.<cwd>.mcpServers`.
 ///
 /// Edge case: a name declared in BOTH a project config and the global
-/// `~/.grok/config.toml` is dropped when untrusted. This is intended — untrusted
+/// `~/.fusion/config.toml` is dropped when untrusted. This is intended — untrusted
 /// project content must not influence the command spawned for a shared name.
 pub fn project_scoped_mcp_names(cwd: &Path) -> HashSet<String> {
     let mut names = HashSet::new();
@@ -1189,7 +1189,7 @@ mod tests {
 
         // A `<cwd>/.grok/lsp.json` server must be tagged `Project` so the gate
         // can distinguish it from user/plugin servers. Asserts on the specific
-        // key, so any real `~/.grok/lsp.json` on the test host is irrelevant.
+        // key, so any real `~/.fusion/lsp.json` on the test host is irrelevant.
         let tmp = repo_tmp();
         let grok = tmp.path().join(".grok");
         std::fs::create_dir_all(&grok).unwrap();

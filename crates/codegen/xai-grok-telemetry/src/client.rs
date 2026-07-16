@@ -109,13 +109,13 @@ impl TelemetryClient {
 }
 
 /// Normalize a subscription tier string to a consistent lowercase_underscore
-/// format for Mixpanel. Handles both CCP display names ("SuperGrok Heavy")
+/// format for Mixpanel. Handles both CCP display names ("Fusion Heavy")
 /// and JWT-derived keys ("supergrok_heavy").
 fn normalize_tier(tier: &str) -> String {
     match tier {
-        "SuperGrok Heavy" | "supergrok_heavy" => "supergrok_heavy",
-        "SuperGrok" | "supergrok" => "supergrok",
-        "SuperGrok Lite" | "supergrok_lite" => "supergrok_lite",
+        "Fusion Heavy" | "supergrok_heavy" => "supergrok_heavy",
+        "Fusion" | "supergrok" => "supergrok",
+        "Fusion Lite" | "supergrok_lite" => "supergrok_lite",
         "X Premium+" | "x_premium_plus" => "x_premium_plus",
         "X Premium" | "x_premium" => "x_premium",
         "X Basic" | "x_basic" => "x_basic",
@@ -212,7 +212,7 @@ pub async fn track(event_name: &str, request_id: &str, ctx: &UserContext, mut me
                     "locale": "English",
                 },
                 "device_attributes": {
-                    "app_name": "Grok Code",
+                    "app_name": "Fusion",
                 },
             },
             "api_key": api_key,
@@ -244,7 +244,7 @@ pub async fn track(event_name: &str, request_id: &str, ctx: &UserContext, mut me
         props.insert("distinct_id".into(), json!(user_id));
         props.insert("time".into(), json!(time_secs));
         props.insert("$insert_id".into(), json!(insert_id));
-        props.insert("app_name".into(), json!("Grok Code"));
+        props.insert("app_name".into(), json!("Fusion"));
         props.insert("user_type".into(), json!("LoggedIn"));
         props.insert("country".into(), json!(ctx.country));
         props.insert("language".into(), json!(ctx.language));
@@ -276,7 +276,7 @@ pub fn sync_profile() {
         let mut props = std::collections::HashMap::new();
         props.insert("agent_id".into(), json!(agent_id));
         props.insert("shell_version".into(), json!(client.shell_version));
-        props.insert("app_name".into(), json!("Grok Code"));
+        props.insert("app_name".into(), json!("Fusion"));
         if let Some(ref client_type) = client.client_type {
             props.insert("client_type".into(), json!(client_type));
         }
@@ -428,13 +428,13 @@ mod tests {
     fn normalize_tier_maps_display_and_claim_names() {
         assert_eq!(normalize_tier("Free"), "free");
         assert_eq!(normalize_tier("free"), "free");
-        assert_eq!(normalize_tier("SuperGrok"), "supergrok");
-        assert_eq!(normalize_tier("SuperGrok Heavy"), "supergrok_heavy");
+        assert_eq!(normalize_tier("Fusion"), "supergrok");
+        assert_eq!(normalize_tier("Fusion Heavy"), "supergrok_heavy");
         assert_eq!(normalize_tier("supergrok_heavy"), "supergrok_heavy");
         assert_eq!(normalize_tier("X Basic"), "x_basic");
         assert_eq!(normalize_tier("X Premium+"), "x_premium_plus");
         assert_eq!(normalize_tier("X Premium"), "x_premium");
-        assert_eq!(normalize_tier("SuperGrok Lite"), "supergrok_lite");
+        assert_eq!(normalize_tier("Fusion Lite"), "supergrok_lite");
         // API key is a dedicated Mixpanel segment — never free.
         assert_eq!(normalize_tier("API Key"), "api_key");
         assert_eq!(normalize_tier("api_key"), "api_key");

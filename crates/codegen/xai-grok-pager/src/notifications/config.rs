@@ -181,7 +181,7 @@ enabled = true
 items = [\"action-required\", \"spinner\", \"activity\", \"session-name\", \"grok\"]
 
 # [[ui.notifications.hooks]]
-# command = \"terminal-notifier -title 'Grok' -message '$GROK_MESSAGE'\"
+# command = \"terminal-notifier -title 'Fusion' -message '$FUSION_MESSAGE'\"
 # events = [\"turn_complete\", \"approval_required\"]
 # only_unfocused = true
 # timeout_secs = 10

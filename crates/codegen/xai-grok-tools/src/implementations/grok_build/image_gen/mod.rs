@@ -45,8 +45,8 @@ pub use xai_grok_tools_api::slash_commands::{
 /// Prose returned to the model (as a normal, successful tool result) when a
 /// free / X Basic user calls `image_gen` or `image_edit`. The model relays it
 /// to the user. The deliberate `/imagine` slash command shows the richer
-/// SuperGrok upsell modal instead; this covers the natural-language path.
-pub(crate) const TIER_RESTRICTED_UPSELL: &str = "Image generation is a SuperGrok feature and isn't available on the free or X Basic tier. Let the user know they can unlock image and video generation by upgrading to SuperGrok: https://grok.com/supergrok?referrer=grok-build. Do not retry this tool.";
+/// Fusion upsell modal instead; this covers the natural-language path.
+pub(crate) const TIER_RESTRICTED_UPSELL: &str = "Image generation is a Fusion feature and isn't available on the free or X Basic tier. Let the user know they can unlock image and video generation by upgrading to Fusion: https://grok.com/supergrok?referrer=grok-build. Do not retry this tool.";
 
 /// HTTP client for xAI Imagine API. Cloned per-request; shares `Arc` state.
 #[derive(Clone)]
@@ -66,7 +66,7 @@ pub struct ImageGenClient {
     attribution_callback: Option<SharedAttributionCallback>,
     /// When `true`, the user is on a tier the Imagine server zero-limits
     /// (free / X Basic). `image_gen` / `image_edit` short-circuit before any
-    /// HTTP call and return the SuperGrok upsell prose instead. See
+    /// HTTP call and return the Fusion upsell prose instead. See
     /// [`ImageGenClient::is_tier_restricted`].
     tier_restricted: bool,
 }
@@ -147,7 +147,7 @@ impl ImageGenClient {
 
     /// Whether the current user's tier (free / X Basic) is zero-limited on
     /// Imagine server-side. `image_gen` / `image_edit` use this to short-circuit
-    /// with the SuperGrok upsell instead of issuing a doomed request.
+    /// with the Fusion upsell instead of issuing a doomed request.
     pub(crate) fn is_tier_restricted(&self) -> bool {
         self.tier_restricted
     }
@@ -280,7 +280,7 @@ pub enum ImageGenConfig {
         /// `true` when the user is on a tier the Imagine server zero-limits
         /// (free / X Basic). The tools stay advertised to the model, but
         /// `image_gen` / `image_edit` short-circuit at call time with the
-        /// SuperGrok upsell prose instead of a doomed request. Set by the
+        /// Fusion upsell prose instead of a doomed request. Set by the
         /// host from the subscription tier; always `false` for team /
         /// API-key / workspace callers.
         tier_restricted: bool,
@@ -547,7 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn tier_restricted_short_circuits_with_upsell() {
-        // A free / X Basic user's image_gen call returns the SuperGrok upsell
+        // A free / X Basic user's image_gen call returns the Fusion upsell
         // prose as a normal result (no HTTP, no error card) so the model can
         // relay it. Only the client is inserted — the short-circuit returns
         // before any other resource (e.g. SessionFolder) is required.
@@ -576,7 +576,7 @@ mod tests {
 
         match result {
             ToolOutput::Text(t) => {
-                assert!(t.text.contains("SuperGrok"), "got: {}", t.text);
+                assert!(t.text.contains("Fusion"), "got: {}", t.text);
                 assert!(t.text.contains("supergrok?referrer=grok-build"));
             }
             other => panic!("expected Text upsell, got {other:?}"),

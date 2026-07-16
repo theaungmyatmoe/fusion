@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 // Project-hook trust is no longer stored here: the shell's folder-trust store
-// (`~/.grok/trusted_folders.toml`) is the single authority for whether a repo's
+// (`~/.fusion/trusted_folders.toml`) is the single authority for whether a repo's
 // project hooks run (the same gate as repo-local MCP/LSP). The helpers below
 // exist only to migrate prior grants out of the legacy file.
 

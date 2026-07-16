@@ -8,7 +8,7 @@ use crate::terminal::{MultiplexerKind, TerminalContext, TerminalName};
 pub enum NotificationProtocol {
     /// iTerm2/WezTerm/Warp: `\x1b]9;{message}\x07`
     Osc9,
-    /// Kitty: `\x1b]99;i=grok;{message}\x1b\\`
+    /// Kitty: `\x1b]99;i=fusion;{message}\x1b\\`
     Osc99,
     /// Ghostty/VTE: `\x1b]777;notify;{title};{body}\x1b\\`
     Osc777,
@@ -78,8 +78,8 @@ pub fn emit_notification(
     // the app name to avoid showing the session name twice.
     let sequence: Cow<'_, str> = match protocol {
         NotificationProtocol::Osc9 => format!("\x1b]9;{body} \u{b7} {title}\x07").into(),
-        NotificationProtocol::Osc99 => format!("\x1b]99;i=grok;{body} \u{b7} {title}\x1b\\").into(),
-        NotificationProtocol::Osc777 => format!("\x1b]777;notify;Grok;{body}\x1b\\").into(),
+        NotificationProtocol::Osc99 => format!("\x1b]99;i=fusion;{body} \u{b7} {title}\x1b\\").into(),
+        NotificationProtocol::Osc777 => format!("\x1b]777;notify;Fusion;{body}\x1b\\").into(),
         NotificationProtocol::Bel => Cow::Borrowed("\x07"),
         NotificationProtocol::None => return,
     };

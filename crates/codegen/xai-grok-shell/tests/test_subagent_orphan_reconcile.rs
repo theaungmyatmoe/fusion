@@ -6,7 +6,7 @@
 //! session's `subagents/` dir and flips any stale `running` meta (not tracked by
 //! the live coordinator) to `cancelled` (mechanism A, the meta pass).
 //!
-//! This test spawns a real `grok agent stdio` process, seeds an orphaned
+//! This test spawns a real `fusion agent stdio` process, seeds an orphaned
 //! `running` meta on disk, resumes the session, and asserts the meta was
 //! reconciled to `cancelled`.
 //!
