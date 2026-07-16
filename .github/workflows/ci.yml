@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main, dev ]
 
+# One active CI per branch/PR — cancel superseding runs from rapid pushes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -13,7 +18,7 @@ env:
   CARGO_BUILD_JOBS: 2
 
 jobs:
-  # ── Build & Test ────────────────────────────────────────────────────────────
+  # ── Fast path: compile + unit tests (every push/PR) ─────────────────────────
   build:
     name: Build & Test (${{ matrix.os }})
     strategy:
@@ -48,49 +53,19 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build fusion binary
-        run: cargo build -p xai-grok-pager-bin
+      # check is enough to catch compile breaks; full `cargo build` of the binary
+      # is redundant with musl release on main and makes every push very slow.
+      - name: cargo check (fusion)
+        run: cargo check -p xai-grok-pager-bin
 
       - name: Run unit tests (core crates)
         run: |
           cargo test -p xai-grok-agent -p xai-grok-models -p xai-grok-config --lib -- --test-threads=2
 
-  # ── Compile check ───────────────────────────────────────────────────────────
-  # Full workspace `cargo fmt --check` / `clippy -D warnings` is not green yet
-  # after the monorepo import; keep a compile gate until formatting is cleaned up.
-  check:
-    name: Compile check
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "29.3"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.92.0"
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-check-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: cargo check (fusion)
-        run: cargo check -p xai-grok-pager-bin
-
-  # ── Linux static build check ────────────────────────────────────────────────
+  # ── Linux static build (main only — release already covers this on tags) ───
   linux-musl:
     name: Linux musl static build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
