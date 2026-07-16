@@ -10,33 +10,33 @@ permissions:
 
 jobs:
   build:
+    name: Build ${{ matrix.target }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          # Linux x86_64 (static musl)
+          # ── Linux (static musl) ────────────────────────────────────────────
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             binary: fusion
-          # Linux aarch64 (static musl, cross-compiled)
+            cross: false
+
+          # Termux / Android ARM64 — cross-compiled
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             binary: fusion
-          # macOS x86_64
+            cross: true
+
+          # ── macOS ─────────────────────────────────────────────────────────
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13        # last Intel runner
             binary: fusion
-          # macOS aarch64 (Apple Silicon)
+            cross: false
+
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-latest    # Apple Silicon
             binary: fusion
-          # Android/Termux aarch64
-          - target: aarch64-linux-android
-            os: ubuntu-latest
-            binary: fusion
-          # iOS/iSH Alpine (static musl 32-bit x86, cross-compiled) — commented out for now
-          # - target: i686-unknown-linux-musl
-          #   os: ubuntu-latest
-          #   binary: fusion
+            cross: false
 
     runs-on: ${{ matrix.os }}
 
@@ -48,38 +48,70 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross (for cross-compilation)
-        if: contains(matrix.target, 'aarch64-unknown-linux') || contains(matrix.target, 'android') || matrix.target == 'i686-unknown-linux-musl'
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
+      # ── Linux x86_64 musl (native, just needs musl-tools) ─────────────────
       - name: Install musl tools (Linux x86_64)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      # ── Cross-compile (aarch64 musl / Android) ───────────────────────────
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      # ── Cache ─────────────────────────────────────────────────────────────
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # ── Build ──────────────────────────────────────────────────────────────
       - name: Build (native)
-        if: "!contains(matrix.target, 'aarch64-unknown-linux') && !contains(matrix.target, 'android') && matrix.target != 'i686-unknown-linux-musl'"
-        run: cargo build --release --target ${{ matrix.target }}
+        if: "!matrix.cross"
+        run: |
+          cargo build \
+            --release \
+            --target ${{ matrix.target }} \
+            --features release-dist \
+            -p xai-grok-pager-bin
 
       - name: Build (cross)
-        if: contains(matrix.target, 'aarch64-unknown-linux') || contains(matrix.target, 'android') || matrix.target == 'i686-unknown-linux-musl'
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Package binary
+        if: matrix.cross
         run: |
+          cross build \
+            --release \
+            --target ${{ matrix.target }} \
+            --features release-dist \
+            -p xai-grok-pager-bin
+
+      # ── Package ────────────────────────────────────────────────────────────
+      - name: Package binary
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARTIFACT="fusion-${TAG}-${{ matrix.target }}"
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.binary }}-${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.binary }}
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
           cd dist
-          tar czf ${{ matrix.binary }}-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
-          rm ${{ matrix.binary }}
+          tar czf "${ARTIFACT}.tar.gz" "${{ matrix.binary }}"
+          # Produce a checksum
+          sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
+          rm "${{ matrix.binary }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary }}-${{ matrix.target }}
+          name: fusion-${{ matrix.target }}
           path: dist/*
 
+  # ── GitHub Release ──────────────────────────────────────────────────────────
   release:
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -89,9 +121,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
+          body: |
+            ## Fusion ${{ github.ref_name }}
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 (static) | `fusion-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz` |
+            | Linux aarch64 / Termux (static) | `fusion-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz` |
+            | macOS Intel | `fusion-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz` |
+            | macOS Apple Silicon | `fusion-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz` |
+
+            ### Install (Termux / Android)
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/fusion-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz | tar xz
+            chmod +x fusion
+            mv fusion $PREFIX/bin/fusion
+            ```
