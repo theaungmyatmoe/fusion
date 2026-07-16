@@ -28,11 +28,6 @@ jobs:
             cross: true
 
           # ── macOS ─────────────────────────────────────────────────────────
-          - target: x86_64-apple-darwin
-            os: macos-13        # last Intel runner
-            binary: fusion
-            cross: false
-
           - target: aarch64-apple-darwin
             os: macos-latest    # Apple Silicon
             binary: fusion
@@ -156,7 +151,6 @@ jobs:
             |----------|------|
             | Linux x86_64 (static) | `fusion-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz` |
             | Linux aarch64 / Termux (static) | `fusion-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz` |
-            | macOS Intel | `fusion-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz` |
             | macOS Apple Silicon | `fusion-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz` |
 
             ### Install (Termux / Android)
