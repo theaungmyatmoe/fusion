@@ -40,12 +40,23 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    timeout-minutes: 180
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      # protobuf codegen (xai-grok-tools-api etc.) needs a real protoc on PATH.
+      # bin/protoc is a DotSlash wrapper and fails in CI without dotslash.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
         with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
           targets: ${{ matrix.target }}
 
       # ── Linux x86_64 musl (native, just needs musl-tools) ─────────────────
@@ -73,6 +84,8 @@ jobs:
       # ── Build ──────────────────────────────────────────────────────────────
       - name: Build (native)
         if: "!matrix.cross"
+        env:
+          CARGO_BUILD_JOBS: 2
         run: |
           cargo build \
             --release \
@@ -82,6 +95,8 @@ jobs:
 
       - name: Build (cross)
         if: matrix.cross
+        env:
+          CARGO_BUILD_JOBS: 2
         run: |
           cross build \
             --release \
