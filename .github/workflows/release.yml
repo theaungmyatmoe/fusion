@@ -94,6 +94,9 @@ jobs:
         if: matrix.cross
         env:
           CARGO_BUILD_JOBS: 2
+          # Host PROTOC from setup-protoc is not visible in the cross container.
+          # Cross.toml pre-build installs protobuf-compiler → /usr/bin/protoc.
+          PROTOC: /usr/bin/protoc
         run: |
           cross build \
             --release \

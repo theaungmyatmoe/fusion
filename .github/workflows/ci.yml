@@ -98,6 +98,11 @@ jobs:
           key: ubuntu-musl-cross-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build static binary (cross)
+        env:
+          # Host setup-protoc sets PROTOC to a path that does not exist inside
+          # the cross Docker image. Use the container-installed protoc instead
+          # (see Cross.toml pre-build).
+          PROTOC: /usr/bin/protoc
         run: |
           cross build \
             --release \

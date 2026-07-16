@@ -1,0 +1,15 @@
+# Hermetic musl builds via https://github.com/cross-rs/cross
+#
+# Host musl-gcc breaks sqlite-vec (BSD typedefs). Cross images are fine, but
+# they do not ship protoc — our tools-api build.rs needs it. Install inside
+# the container before cargo runs.
+
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+    "apt-get update && apt-get install -y --no-install-recommends protobuf-compiler",
+]
+
+[target.aarch64-unknown-linux-musl]
+pre-build = [
+    "apt-get update && apt-get install -y --no-install-recommends protobuf-compiler",
+]
