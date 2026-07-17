@@ -21,11 +21,11 @@ jobs:
             binary: fusion
             cross: true
 
-          # Termux / Android ARM64 — static musl via cross
-          - target: aarch64-unknown-linux-musl
+          # Termux / Android ARM64 — native target compiled via NDK
+          - target: aarch64-linux-android
             os: ubuntu-latest
             binary: fusion
-            cross: true
+            cross: false
 
           # ── macOS ─────────────────────────────────────────────────────────
           - target: aarch64-apple-darwin
@@ -75,7 +75,7 @@ jobs:
 
       # ── Build ──────────────────────────────────────────────────────────────
       - name: Build (native)
-        if: "!matrix.cross"
+        if: "!matrix.cross && matrix.target != 'aarch64-linux-android'"
         env:
           CARGO_BUILD_JOBS: 2
         run: |
@@ -84,6 +84,11 @@ jobs:
             --target ${{ matrix.target }} \
             --features release-dist \
             -p xai-grok-pager-bin
+
+      - name: Build Android ARM64
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          ./scripts/build-linux.sh arm64
 
       - name: Build (cross)
         if: matrix.cross
@@ -106,7 +111,12 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           ARTIFACT="fusion-${TAG}-${{ matrix.target }}"
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
+          if [ "${{ matrix.target }}" = "aarch64-linux-android" ]; then
+            # The build script already compiled, stripped, and put it in dist/fusion-linux-aarch64
+            mv "dist/fusion-linux-aarch64" "dist/${{ matrix.binary }}"
+          else
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
+          fi
           cd dist
           tar czf "${ARTIFACT}.tar.gz" "${{ matrix.binary }}"
           # Produce a checksum (Linux has sha256sum; macOS uses shasum)
@@ -150,12 +160,12 @@ jobs:
             | Platform | File |
             |----------|------|
             | Linux x86_64 (static) | `fusion-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz` |
-            | Linux aarch64 / Termux (static) | `fusion-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz` |
+            | Termux / Android ARM64 (native) | `fusion-${{ github.ref_name }}-aarch64-linux-android.tar.gz` |
             | macOS Apple Silicon | `fusion-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz` |
 
             ### Install (Termux / Android)
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/fusion-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz | tar xz
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/fusion-${{ github.ref_name }}-aarch64-linux-android.tar.gz | tar xz
             chmod +x fusion
             mv fusion $PREFIX/bin/fusion
             ```

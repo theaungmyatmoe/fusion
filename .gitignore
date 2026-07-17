@@ -29,3 +29,6 @@ image_*.png
 
 # Nested crate build outputs
 **/target/
+
+# Local third_party binaries
+/third_party/ripgrep/

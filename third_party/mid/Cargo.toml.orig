@@ -1,0 +1,29 @@
+[package]
+name = "mid"
+version = "4.0.0"
+edition = "2024"
+authors = ["doroved"]
+description = "Creating a Machine ID hash for MacOS/Windows/Linux"
+readme = "README.md"
+repository = "https://github.com/doroved/mid"
+license = "MIT OR Apache-2.0"
+keywords = ["hwid", "machineid", "hardware-id", "machineuid", "uuid"]
+categories = ["authentication", "config", "accessibility"]
+
+[lib]
+doctest = false
+
+[[example]]
+name = "example"
+path = "example/main.rs"
+required-features = ["serde", "serde_json"]
+
+[dependencies]
+hex = "0.4.3"
+hmac-sha256 = "1.1.12"
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
+
+[features]
+serde = ["dep:serde"]
+serde_json = ["dep:serde_json"]

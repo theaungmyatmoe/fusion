@@ -1,0 +1,28 @@
+[package]
+name = "waitpid-any"
+version = "0.3.0"
+edition = "2021"
+# Keep in sync with CI!
+rust-version = "1.63"
+description = "Wait for any PID, an extension to waitpid(2)"
+categories = ["api-bindings", "os::unix-apis", "os::windows-apis"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/oxalica/waitpid-any"
+keywords = ["process", "pidfd", "kqueue", "wait", "waitpid"]
+include = [
+    "/Cargo.toml",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+    "/README.md",
+    "/src/**",
+]
+
+# This can be more precise but unsupported platforms will fail to compile anyway.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["event", "process", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

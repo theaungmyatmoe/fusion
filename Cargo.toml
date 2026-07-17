@@ -406,3 +406,7 @@ useless_format = "allow"
 # Musl-fixed sqlite-vec (crates.io 0.1.7-alpha.2 fails on musl; 0.1.10 incomplete package).
 [patch.crates-io]
 sqlite-vec = { path = "third_party/sqlite-vec" }
+waitpid-any = { path = "third_party/waitpid-any" }
+nono = { path = "third_party/nono" }
+mid = { path = "third_party/mid" }
+arboard = { path = "third_party/arboard" }

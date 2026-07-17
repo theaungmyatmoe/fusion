@@ -65,6 +65,14 @@ pub fn detect_with_osc11_fallback() -> Option<SystemAppearance> {
 }
 
 /// Inner detection via desktop APIs only (no mock, no OSC 11).
+#[cfg(target_os = "android")]
+fn detect_without_mock() -> Option<SystemAppearance> {
+    // dark-light crate returns Mode directly instead of Result on Android, defaulting to Unspecified.
+    None
+}
+
+/// Inner detection via desktop APIs only (no mock, no OSC 11).
+#[cfg(not(target_os = "android"))]
 fn detect_without_mock() -> Option<SystemAppearance> {
     match dark_light::detect() {
         Ok(dark_light::Mode::Dark) => Some(SystemAppearance::Dark),

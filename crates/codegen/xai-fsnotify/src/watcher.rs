@@ -159,12 +159,91 @@ pub(crate) fn watch_strategy() -> WatchStrategy {
 /// for other processes — the entire point of this mode is not to starve them.
 const DEFAULT_MAX_WATCHES: usize = 49_152;
 
+#[cfg(target_os = "linux")]
+const FALLBACK_MAX_WATCHES_CONSTRAINED: usize = 4_096;
+
+#[cfg(target_os = "linux")]
+fn read_os_inotify_limit() -> Option<usize> {
+    std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+}
+
 pub(crate) fn max_watch_budget() -> usize {
-    std::env::var("GROK_FSNOTIFY_MAX_WATCHES")
+    // Explicit env override always wins.
+    if let Some(n) = std::env::var("GROK_FSNOTIFY_MAX_WATCHES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_MAX_WATCHES)
+    {
+        return n;
+    }
+
+    // On Linux, try to read the real OS limit and reserve 25% for other
+    // processes. If the procfs file is unreadable (Termux/Android without
+    // root), fall back to a conservative cap that avoids MaxFilesWatch.
+    #[cfg(target_os = "linux")]
+    {
+        match read_os_inotify_limit() {
+            Some(os_limit) => {
+                let budget = (os_limit * 3) / 4; // 75% of OS limit
+                let budget = budget.min(DEFAULT_MAX_WATCHES);
+                tracing::debug!(
+                    "fs_notify: OS inotify limit = {os_limit}, using watch budget = {budget}"
+                );
+                budget
+            }
+            None => {
+                tracing::debug!(
+                    "fs_notify: cannot read OS inotify limit (Termux/Android?), \
+                     using conservative budget = {FALLBACK_MAX_WATCHES_CONSTRAINED}"
+                );
+                FALLBACK_MAX_WATCHES_CONSTRAINED
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        DEFAULT_MAX_WATCHES
+    }
+}
+
+/// Well-known directory basenames that are never part of user source trees and
+/// should always be pruned from watch selection — regardless of whether a
+/// `.gitignore` covers them. This prevents watch-budget exhaustion when the
+/// watch root is a home directory (common on Termux/Android) that contains
+/// package-manager caches with tens of thousands of nested directories.
+const ALWAYS_SKIP_DIR_NAMES: &[&str] = &[
+    // JS/Node package managers
+    "node_modules",
+    ".bun",
+    ".npm",
+    ".nvm",
+    ".fnm",
+    ".pnpm-store",
+    ".yarn",
+    // Rust
+    ".rustup",
+    // Python
+    ".venv",
+    "__pycache__",
+    ".conda",
+    ".pyenv",
+    // General caches / build artifacts
+    ".cache",
+    ".local",
+    ".gradle",
+    ".m2",
+    ".pub-cache",
+];
+
+/// Returns `true` if the directory should always be skipped from watch
+/// selection (well-known non-project directories).
+fn is_always_skipped_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| ALWAYS_SKIP_DIR_NAMES.contains(&name))
 }
 
 #[derive(Default)]
@@ -546,18 +625,26 @@ fn passes_custom_globs(
 }
 
 /// `WalkBuilder` configured for watch selection: honors `.gitignore`,
-/// `.git/info/exclude`, global excludes, and `.ignore`, and never follows
-/// symlinks (so watches can't leave the workspace via a symlinked dir).
+/// `.git/info/exclude`, global excludes, `.ignore`, and the hardcoded
+/// [`ALWAYS_SKIP_DIR_NAMES`] list. Never follows symlinks (so watches can't
+/// leave the workspace via a symlinked dir).
 fn ignore_walker(root: &Path, max_depth: Option<usize>) -> ignore::Walk {
-    WalkBuilder::new(root)
+    let mut builder = WalkBuilder::new(root);
+    builder
         .hidden(false) // Let gitignore, not the leading dot, decide.
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
         .ignore(true)
         .follow_links(false)
-        .max_depth(max_depth)
-        .build()
+        .max_depth(max_depth);
+    builder.filter_entry(|entry| {
+        if entry.file_type().is_some_and(|ft| ft.is_dir()) && is_always_skipped_dir(entry.path()) {
+            return false;
+        }
+        true
+    });
+    builder.build()
 }
 
 /// Immediate child directories of `root` to watch recursively.
@@ -641,6 +728,9 @@ fn pruning_walker(
         let path = entry.path();
         if dir_named(path, ".git") || dir_named(path, ".sl") {
             return false; // VCS metadata is watched separately (or not at all).
+        }
+        if is_always_skipped_dir(path) {
+            return false; // Well-known non-project dirs (node_modules, .bun, etc.).
         }
         passes_custom_globs(path, &custom_ignore, &custom_include)
     });
