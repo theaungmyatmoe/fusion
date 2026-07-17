@@ -6,13 +6,12 @@
 # Release assets (see .github/workflows/release.yml):
 #   fusion-<tag>-<triple>.tar.gz
 # where <triple> is one of:
-#   x86_64-unknown-linux-musl
-#   aarch64-unknown-linux-musl   ← Termux / Android ARM64 (static musl)
-#   x86_64-apple-darwin
-#   aarch64-apple-darwin
+#   x86_64-unknown-linux-musl      ← Linux x86_64 (static)
+#   aarch64-linux-android          ← Termux / Android ARM64 (native NDK)
+#   aarch64-apple-darwin           ← macOS Apple Silicon
 #
-# Older releases also published unversioned names (fusion-<triple>.tar.gz)
-# and a legacy Termux name (fusion-aarch64-linux-android). We try those too.
+# Older releases used aarch64-unknown-linux-musl for Termux; we fall back to
+# that as a secondary candidate if the primary asset is not found.
 set -eu
 
 REPO="theaungmyatmoe/fusion"
@@ -99,10 +98,13 @@ case "$ARCH" in
 esac
 
 # Target triple for GitHub release assets.
-# Termux uses the same static musl aarch64 build as Linux ARM64 —
-# not aarch64-linux-android (that was the old dynamic/Android NDK naming).
+# Termux uses the native aarch64-linux-android build (compiled via Android NDK).
+# Alpine / plain Linux use the static musl build.
 case "$PLATFORM" in
-    termux|alpine|linux)
+    termux)
+        TARGET="${TARGET_ARCH}-linux-android"
+        ;;
+    alpine|linux)
         TARGET="${TARGET_ARCH}-unknown-linux-musl"
         ;;
     macos)
@@ -155,13 +157,13 @@ for url in $(pick_download_url "${TARGET}"); do
     esac
 done
 
-# 3) Legacy Termux asset name (pre-static-musl releases used -linux-android)
+# 3) Legacy Termux fallback: older releases used -aarch64-unknown-linux-musl
 if [ "$PLATFORM" = "termux" ] && [ "$TARGET_ARCH" = "aarch64" ]; then
-    for url in $(pick_download_url "aarch64-linux-android.tar.gz"); do
+    for url in $(pick_download_url "aarch64-unknown-linux-musl.tar.gz"); do
         CANDIDATES="${CANDIDATES}${url}
 "
     done
-    for url in $(pick_download_url "aarch64-linux-android"); do
+    for url in $(pick_download_url "aarch64-unknown-linux-musl"); do
         case "$url" in
             *.tar.gz|*.sha256) ;;
             *) CANDIDATES="${CANDIDATES}${url}
@@ -217,7 +219,7 @@ fi
 echo ""
 ok "Fusion installed to $INSTALL_DIR/$BINARY"
 
-# Show version if the binary can run (static musl should just work on Termux)
+# Show version if the binary can run
 if "$INSTALL_DIR/$BINARY" --version >/dev/null 2>&1; then
     info "Version: $("$INSTALL_DIR/$BINARY" --version 2>/dev/null | head -1)"
 fi
