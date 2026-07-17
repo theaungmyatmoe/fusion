@@ -8,7 +8,6 @@ It runs as a **single binary** (`fusion`) with a full interactive TUI, headless 
 |:---:|:---:|
 | ![Fusion TUI](docs/screenshot.png) | ![Fusion on Termux](docs/screenshot_mobile.png) |
 
----
 
 ## Install
 
@@ -66,7 +65,6 @@ proot-distro login alpine
 curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/install.sh | sh
 ```
 
----
 
 ## Quick start
 
@@ -93,7 +91,6 @@ Main config file: **`~/.fusion/config.toml`**.
 
 Project rules / agent instructions: `AGENTS.md` (and compatible layouts) in the repo.
 
----
 
 ## Configuration
 
@@ -130,7 +127,6 @@ Legacy / project-level examples may still use `fusion.toml` or `~/.config/fusion
 
 Default model catalog includes Cloudflare-hosted models (e.g. Kimi K2.7 Code). Bring your own keys.
 
----
 
 ## Usage
 
@@ -161,7 +157,6 @@ fusion --help
 fusion agent --help
 ```
 
----
 
 ## Build from source
 
@@ -193,7 +188,6 @@ Cross static Linux / Termux (needs musl toolchain):
 
 Makefile shortcuts: `make build`, `make release`, `make termux`, `make dist`.
 
----
 
 ## Architecture (high level)
 
@@ -209,7 +203,6 @@ third_party/   # vendored layout / mermaid bits
 
 Internal crate names may still say `xai-grok-*` (historical). **User-facing product identity is Fusion / Fusion AI.**
 
----
 
 ## Releases & CI
 
@@ -221,7 +214,6 @@ git tag -a v0.2.0 -m "Fusion monorepo + Fusion AI identity"
 git push origin v0.2.0
 ```
 
----
 
 ## Roadmap
 
@@ -229,7 +221,6 @@ Product plan and milestones: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 Related: [OpenClaw integration](docs/openclaw-integration.md).
 
----
 
 ## License
 
