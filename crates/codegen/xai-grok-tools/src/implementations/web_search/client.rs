@@ -206,15 +206,15 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
-        #[cfg(test)]
-        {
-            self.search_responses_api(query, allowed_domains).await
-        }
-        #[cfg(not(test))]
-        {
-            let (content, pairs) = self.search_duckduckgo(query, allowed_domains).await?;
-            let citations = pairs.into_iter().map(|(_, url)| url).collect();
-            Ok((content, citations))
+        match self.search_duckduckgo(query, allowed_domains.clone()).await {
+            Ok((content, pairs)) => {
+                let citations = pairs.into_iter().map(|(_, url)| url).collect();
+                Ok((content, citations))
+            }
+            Err(e) => {
+                tracing::warn!("DuckDuckGo search failed ({e}), falling back to Responses API");
+                self.search_responses_api(query, allowed_domains).await
+            }
         }
     }
 
