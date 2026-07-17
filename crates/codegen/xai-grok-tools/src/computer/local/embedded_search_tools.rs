@@ -221,19 +221,11 @@ fn resolve_tool(bin_name: &str, env_override: &str, bundled: Option<PathBuf>) ->
 /// injected shadow gates on `[ -x ]` at call time and falls back to the OS binary
 /// if the hint isn't executable, so a non-exec path can't hard-fail `find`/`grep`.
 fn verify_binary_works(path: &std::path::Path) -> bool {
-    #[cfg(test)]
-    {
-        let _ = path;
-        true
-    }
-    #[cfg(not(test))]
-    {
-        std::process::Command::new(path)
-            .arg("--help")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
+    std::process::Command::new(path)
+        .arg("--help")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn resolve_tool_from(

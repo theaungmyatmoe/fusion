@@ -23,6 +23,21 @@ import urllib.request
 import re
 
 try:
+    from duckduckgo_search import DDGS
+    def search_ddgs(query):
+        with DDGS() as ddgs:
+            results = []
+            for r in ddgs.text(query, max_results=10):
+                results.append({
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", "")
+                })
+            return results
+except Exception:
+    search_ddgs = None
+
+try:
     import requests
     from bs4 import BeautifulSoup
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -98,7 +113,12 @@ def main():
         sys.exit(1)
     query = sys.argv[1]
     results = None
-    if search_requests:
+    if search_ddgs:
+        try:
+            results = search_ddgs(query)
+        except Exception:
+            pass
+    if not results and search_requests:
         try:
             results = search_requests(query)
         except Exception:
@@ -206,21 +226,14 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
-        #[cfg(test)]
-        {
-            self.search_responses_api(query, allowed_domains).await
-        }
-        #[cfg(not(test))]
-        {
-            match self.search_duckduckgo(query, allowed_domains.clone()).await {
-                Ok((content, pairs)) => {
-                    let citations = pairs.into_iter().map(|(_, url)| url).collect();
-                    Ok((content, citations))
-                }
-                Err(e) => {
-                    tracing::warn!("DuckDuckGo search failed ({e}), falling back to Responses API");
-                    self.search_responses_api(query, allowed_domains).await
-                }
+        match self.search_duckduckgo(query, allowed_domains.clone()).await {
+            Ok((content, pairs)) => {
+                let citations = pairs.into_iter().map(|(_, url)| url).collect();
+                Ok((content, citations))
+            }
+            Err(e) => {
+                tracing::warn!("DuckDuckGo search failed ({e}), falling back to Responses API");
+                self.search_responses_api(query, allowed_domains).await
             }
         }
     }
@@ -319,18 +332,11 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<(String, String)>), xai_tool_runtime::ToolError> {
-        #[cfg(test)]
-        {
-            self.search_with_titles_responses_api(query, allowed_domains).await
-        }
-        #[cfg(not(test))]
-        {
-            match self.search_duckduckgo(query, allowed_domains.clone()).await {
-                Ok(res) => Ok(res),
-                Err(e) => {
-                    tracing::warn!("DuckDuckGo search failed ({e}), falling back to Responses API");
-                    self.search_with_titles_responses_api(query, allowed_domains).await
-                }
+        match self.search_duckduckgo(query, allowed_domains.clone()).await {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                tracing::warn!("DuckDuckGo search failed ({e}), falling back to Responses API");
+                self.search_with_titles_responses_api(query, allowed_domains).await
             }
         }
     }
