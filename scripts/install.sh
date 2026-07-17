@@ -6,7 +6,7 @@
 # Release assets (see .github/workflows/release.yml):
 #   fusion-<tag>-<triple>.tar.gz
 # where <triple> is one of:
-#   x86_64-unknown-linux-musl      ← Linux x86_64 (static)
+#   x86_64-unknown-linux-gnu       ← Linux x86_64
 #   aarch64-linux-android          ← Termux / Android ARM64 (native NDK)
 #   aarch64-apple-darwin           ← macOS Apple Silicon
 #
@@ -105,7 +105,7 @@ case "$PLATFORM" in
         TARGET="${TARGET_ARCH}-linux-android"
         ;;
     alpine|linux)
-        TARGET="${TARGET_ARCH}-unknown-linux-musl"
+        TARGET="${TARGET_ARCH}-unknown-linux-gnu"
         ;;
     macos)
         TARGET="${TARGET_ARCH}-apple-darwin"

@@ -9,32 +9,49 @@ permissions:
   contents: write
 
 jobs:
+  # ── Tag validation ──────────────────────────────────────────────────────────
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] || { echo "❌ Not a tag ref"; exit 1; }
+          tag_ver="${GITHUB_REF_NAME#v}"
+          cargo_ver="$(grep -m1 '^version' crates/codegen/xai-grok-pager-bin/Cargo.toml \
+                        | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          [[ "${tag_ver}" == "${cargo_ver}" ]] \
+            || { echo "❌ Tag v${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+          echo "✅ Tag and Cargo.toml agree (${tag_ver})"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: tag-check
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ── Linux static musl (use cross — host musl-gcc breaks sqlite-vec) ─
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+          # ── Linux x86_64 — native on ubuntu-22.04 (older glibc = wider compat)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
             binary: fusion
-            cross: true
+            android: false
 
-          # Termux / Android ARM64 — native target compiled via NDK
+          # ── Termux / Android ARM64 — native NDK build ───────────────────────
           - target: aarch64-linux-android
             os: ubuntu-latest
             binary: fusion
-            cross: false
+            android: true
 
-          # ── macOS ─────────────────────────────────────────────────────────
+          # ── macOS Apple Silicon ─────────────────────────────────────────────
           - target: aarch64-apple-darwin
-            os: macos-latest    # Apple Silicon
+            os: macos-latest
             binary: fusion
-            cross: false
+            android: false
 
     runs-on: ${{ matrix.os }}
-
     timeout-minutes: 180
 
     steps:
@@ -52,14 +69,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92.0"
-          targets: ${{ matrix.target }}
-
-      # ── musl targets: hermetic toolchain via cross (Docker) ──────────────
-      # Host `musl-tools` / x86_64-linux-musl-gcc fails compiling sqlite-vec
-      # (BSD u_int*_t vs musl stdint). cross images avoid that mismatch.
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+          # Don't add the android target here — build-linux.sh does it via rustup.
+          # Only add the target for non-android builds.
+          targets: ${{ matrix.android == false && matrix.target || '' }}
 
       # ── Cache ─────────────────────────────────────────────────────────────
       - name: Cache cargo registry
@@ -74,8 +86,8 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       # ── Build ──────────────────────────────────────────────────────────────
-      - name: Build (native)
-        if: "!matrix.cross && matrix.target != 'aarch64-linux-android'"
+      - name: Build (native Linux/macOS)
+        if: "!matrix.android"
         env:
           CARGO_BUILD_JOBS: 2
         run: |
@@ -85,24 +97,14 @@ jobs:
             --features release-dist \
             -p xai-grok-pager-bin
 
-      - name: Build Android ARM64
-        if: matrix.target == 'aarch64-linux-android'
+      - name: Strip Linux binary
+        if: "matrix.target == 'x86_64-unknown-linux-gnu'"
+        run: strip "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      - name: Build Android ARM64 (NDK)
+        if: matrix.android
         run: |
           ./scripts/build-linux.sh arm64
-
-      - name: Build (cross)
-        if: matrix.cross
-        env:
-          CARGO_BUILD_JOBS: 2
-          # Host PROTOC from setup-protoc is not visible in the cross container.
-          # Cross.toml pre-build installs protobuf-compiler → /usr/bin/protoc.
-          PROTOC: /usr/bin/protoc
-        run: |
-          cross build \
-            --release \
-            --target ${{ matrix.target }} \
-            --features release-dist \
-            -p xai-grok-pager-bin
 
       # ── Package ────────────────────────────────────────────────────────────
       - name: Package binary
@@ -111,15 +113,15 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           ARTIFACT="fusion-${TAG}-${{ matrix.target }}"
           mkdir -p dist
-          if [ "${{ matrix.target }}" = "aarch64-linux-android" ]; then
-            # The build script already compiled, stripped, and put it in dist/fusion-linux-aarch64
+          if [ "${{ matrix.android }}" = "true" ]; then
+            # build-linux.sh already compiled, stripped, and placed it in dist/
             mv "dist/fusion-linux-aarch64" "dist/${{ matrix.binary }}"
           else
             cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
           fi
           cd dist
           tar czf "${ARTIFACT}.tar.gz" "${{ matrix.binary }}"
-          # Produce a checksum (Linux has sha256sum; macOS uses shasum)
+          # Produce a checksum (Linux: sha256sum, macOS: shasum)
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
           else
@@ -159,13 +161,16 @@ jobs:
 
             | Platform | File |
             |----------|------|
-            | Linux x86_64 (static) | `fusion-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz` |
-            | Termux / Android ARM64 (native) | `fusion-${{ github.ref_name }}-aarch64-linux-android.tar.gz` |
+            | Linux x86_64 | `fusion-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz` |
+            | Termux / Android ARM64 | `fusion-${{ github.ref_name }}-aarch64-linux-android.tar.gz` |
             | macOS Apple Silicon | `fusion-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz` |
 
             ### Install (Termux / Android)
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/fusion-${{ github.ref_name }}-aarch64-linux-android.tar.gz | tar xz
-            chmod +x fusion
-            mv fusion $PREFIX/bin/fusion
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
+            ```
+
+            ### Install (one-liner, all platforms)
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
             ```
