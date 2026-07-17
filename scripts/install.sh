@@ -75,10 +75,22 @@ elif [ -n "${PREFIX:-}" ] && printf '%s' "$PREFIX" | grep -q "com.termux"; then
     mkdir -p "$TMPDIR"
 
     # Auto-install basic deps if missing
-    if ! command -v git >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1; then
-        info "Installing missing dependencies (git, ripgrep)..."
+    if ! command -v git >/dev/null 2>&1 \
+        || ! command -v rg >/dev/null 2>&1 \
+        || ! command -v python3 >/dev/null 2>&1 \
+        || ! command -v curl >/dev/null 2>&1 \
+        || [ ! -f "$PREFIX/etc/tls/cert.pem" ]; then
+        info "Installing missing dependencies (git, ripgrep, python, curl, ca-certificates)..."
         pkg update -y || true
-        pkg install -y git ripgrep
+        pkg install -y git ripgrep python curl ca-certificates
+    fi
+
+    # Ensure duckduckgo-search Python package is installed
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 -c "import duckduckgo_search" >/dev/null 2>&1; then
+            info "Installing duckduckgo-search Python package (for captcha-free web search)..."
+            pip install --upgrade duckduckgo-search || true
+        fi
     fi
 elif [ "$OS" = "darwin" ]; then
     PLATFORM="macos"
