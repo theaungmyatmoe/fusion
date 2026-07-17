@@ -438,7 +438,6 @@ impl WebSearchClient {
             }
         }
 
-        // ── 1. Try python3 ──────────────────────────────────────────────────────
         let fusion_dir = dirs::home_dir()
             .map(|h| h.join(".fusion"))
             .unwrap_or_else(|| std::path::PathBuf::from(".fusion"));
@@ -448,6 +447,19 @@ impl WebSearchClient {
             let _ = std::fs::write(&script_path, DDG_SEARCH_PY);
         }
 
+        let log_dir = std::path::Path::new("/sdcard/Android/data/com.termux/files");
+        let py_log_path = if log_dir.exists() {
+            log_dir.join("python_search_error.log")
+        } else {
+            fusion_dir.join("python_search_error.log")
+        };
+        let curl_log_path = if log_dir.exists() {
+            log_dir.join("curl_search_error.log")
+        } else {
+            fusion_dir.join("curl_search_error.log")
+        };
+
+        // ── 1. Try python3 ──────────────────────────────────────────────────────
         let mut py_cmd = tokio::process::Command::new("python3");
         py_cmd.arg(&script_path).arg(query);
         if let Some(ref ca) = ca_bundle {
@@ -455,6 +467,11 @@ impl WebSearchClient {
         }
 
         if let Ok(py_out) = py_cmd.output().await {
+            let py_err = String::from_utf8_lossy(&py_out.stderr).into_owned();
+            let _ = std::fs::write(
+                &py_log_path,
+                format!("STDOUT:\n{}\nSTDERR:\n{}", String::from_utf8_lossy(&py_out.stdout), py_err),
+            );
             if py_out.status.success() {
                 // python script outputs JSON — return a sentinel so the parser
                 // knows to read JSON instead of HTML.
@@ -487,11 +504,21 @@ impl WebSearchClient {
         }
 
         let curl_out = curl_cmd.output().await.map_err(|e| {
+            let _ = std::fs::write(
+                &curl_log_path,
+                format!("Failed to run curl command: {e}"),
+            );
             xai_tool_runtime::ToolError::execution(
                 xai_tool_protocol::ToolId::new("web_search").expect("valid"),
                 format!("Neither python3 nor curl is available: {e}"),
             )
         })?;
+
+        let curl_err = String::from_utf8_lossy(&curl_out.stderr).into_owned();
+        let _ = std::fs::write(
+            &curl_log_path,
+            format!("STATUS: {:?}\nSTDOUT:\n{}\nSTDERR:\n{}", curl_out.status, String::from_utf8_lossy(&curl_out.stdout), curl_err),
+        );
 
         if !curl_out.status.success() {
             let err = String::from_utf8_lossy(&curl_out.stderr);
