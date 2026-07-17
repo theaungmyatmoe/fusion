@@ -62,12 +62,11 @@ jobs:
         run: |
           cargo test -p xai-grok-agent -p xai-grok-models -p xai-grok-config --lib -- --test-threads=2
 
-  # ── Linux static build (main only — release covers all platforms on tags) ─
-  # Host musl-gcc fails on sqlite-vec; use cross's Docker musl image instead.
-  linux-musl:
-    name: Linux musl static build
+  # ── Linux release build check (main only) ───────────────────────────────────
+  linux-release-check:
+    name: Linux release build check
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -78,14 +77,11 @@ jobs:
           version: "29.3"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Rust + musl target
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92.0"
-          targets: x86_64-unknown-linux-musl
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+          targets: x86_64-unknown-linux-gnu
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -93,23 +89,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin
             target
-          key: ubuntu-musl-cross-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-release-check-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build static binary (cross)
-        env:
-          # Host setup-protoc sets PROTOC to a path that does not exist inside
-          # the cross Docker image. Use the container-installed protoc instead
-          # (see Cross.toml pre-build).
-          PROTOC: /usr/bin/protoc
+      - name: Build release binary
         run: |
-          cross build \
+          cargo build \
             --release \
-            --target x86_64-unknown-linux-musl \
+            --target x86_64-unknown-linux-gnu \
             -p xai-grok-pager-bin
 
       - name: Verify binary
         run: |
-          file target/x86_64-unknown-linux-musl/release/fusion
-          ldd  target/x86_64-unknown-linux-musl/release/fusion 2>&1 || true
+          file target/x86_64-unknown-linux-gnu/release/fusion
+          ldd  target/x86_64-unknown-linux-gnu/release/fusion 2>&1 || true
