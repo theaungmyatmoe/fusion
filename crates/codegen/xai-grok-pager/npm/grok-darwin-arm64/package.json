@@ -1,6 +1,6 @@
 {
     "name": "@xai-official/grok-darwin-arm64",
-    "version": "0.2.0-dev",
+    "version": "0.2.3",
     "description": "darwin-arm64 binary for @xai-official/grok. Do not install directly; install @xai-official/grok instead.",
     "license": "Apache-2.0",
     "files": [
