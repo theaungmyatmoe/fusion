@@ -12,6 +12,15 @@ const RG_BYTES: &[u8] = include_bytes!(concat!(
 ));
 
 #[cfg(bundle_rg)]
+fn verify_binary_works(path: &std::path::Path) -> bool {
+    std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(bundle_rg)]
 fn resolve_bundled_rg() -> std::io::Result<PathBuf> {
     use std::fs;
     #[cfg(unix)]
@@ -31,6 +40,12 @@ fn resolve_bundled_rg() -> std::io::Result<PathBuf> {
             perms.set_mode(0o755);
             fs::set_permissions(&p, perms)?;
         }
+    }
+    if !verify_binary_works(&p) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Bundled ripgrep binary failed to execute",
+        ));
     }
     Ok(p)
 }

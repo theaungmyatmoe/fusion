@@ -220,6 +220,14 @@ fn resolve_tool(bin_name: &str, env_override: &str, bundled: Option<PathBuf>) ->
 /// (a lenient hint, no `+x` probe) so an odd-permission copy still resolves; the
 /// injected shadow gates on `[ -x ]` at call time and falls back to the OS binary
 /// if the hint isn't executable, so a non-exec path can't hard-fail `find`/`grep`.
+fn verify_binary_works(path: &std::path::Path) -> bool {
+    std::process::Command::new(path)
+        .arg("--help")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn resolve_tool_from(
     env_path: Option<PathBuf>,
     bundled: Option<PathBuf>,
@@ -228,13 +236,18 @@ fn resolve_tool_from(
 ) -> Option<PathBuf> {
     if let Some(path) = env_path
         && path.is_file()
+        && verify_binary_works(&path)
     {
         return Some(path);
     }
-    if let Some(path) = bundled {
+    if let Some(path) = bundled
+        && verify_binary_works(&path)
+    {
         return Some(path);
     }
-    if vendor.is_file() {
+    if vendor.is_file()
+        && verify_binary_works(&vendor)
+    {
         return Some(vendor);
     }
     which::which(bin_name).ok()

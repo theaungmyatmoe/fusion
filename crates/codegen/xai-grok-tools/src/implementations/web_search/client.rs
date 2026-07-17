@@ -95,7 +95,7 @@ def search_urllib(query):
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"results": []}))
-        sys.exit(0)
+        sys.exit(1)
     query = sys.argv[1]
     results = None
     if search_requests:
@@ -105,6 +105,8 @@ def main():
             pass
     if not results:
         results = search_urllib(query)
+    if not results:
+        sys.exit(1)
     print(json.dumps({"results": results}))
 
 if __name__ == "__main__":
@@ -418,6 +420,14 @@ impl WebSearchClient {
 
     /// Fetch the DuckDuckGo Lite HTML for `query` using python3 or curl.
     async fn fetch_ddg_html(&self, query: &str) -> Result<String, xai_tool_runtime::ToolError> {
+        // Find standard CA bundle path
+        let ca_bundle = [
+            "/data/data/com.termux/files/usr/etc/tls/ca-certificates.crt",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/pki/tls/certs/ca-bundle.crt",
+            "/etc/ssl/ca-bundle.pem",
+        ].iter().find(|p| std::path::Path::new(p).exists()).copied();
+
         // ── 1. Try python3 ──────────────────────────────────────────────────────
         let fusion_dir = dirs::home_dir()
             .map(|h| h.join(".fusion"))
@@ -428,18 +438,22 @@ impl WebSearchClient {
             let _ = std::fs::write(&script_path, DDG_SEARCH_PY);
         }
 
-        if let Ok(py_out) = tokio::process::Command::new("python3")
-            .arg(&script_path)
-            .arg(query)
-            .output()
-            .await
-        {
+        let mut py_cmd = tokio::process::Command::new("python3");
+        py_cmd.arg(&script_path).arg(query);
+        if let Some(ca) = ca_bundle {
+            py_cmd.env("SSL_CERT_FILE", ca);
+        }
+
+        if let Ok(py_out) = py_cmd.output().await {
             if py_out.status.success() {
                 // python script outputs JSON — return a sentinel so the parser
                 // knows to read JSON instead of HTML.
                 let json_str = String::from_utf8_lossy(&py_out.stdout).into_owned();
-                // Prefix with a magic marker so parse_ddg_results handles it.
-                return Ok(format!("__JSON__:{json_str}"));
+                // Only return if results are not empty
+                if json_str.contains("\"url\":") && !json_str.contains("\"results\": []") {
+                    // Prefix with a magic marker so parse_ddg_results handles it.
+                    return Ok(format!("__JSON__:{json_str}"));
+                }
             }
         }
 
@@ -447,24 +461,27 @@ impl WebSearchClient {
         let mut url_builder = reqwest::Url::parse("https://x.invalid/?").unwrap();
         url_builder.query_pairs_mut().append_pair("q", query);
         let encoded_query = url_builder.query().unwrap_or("").to_string();
-        let curl_out = tokio::process::Command::new("curl")
-            .args([
-                "-s", "-L",
-                "-X", "POST",
-                "https://lite.duckduckgo.com/lite/",
-                "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "-H", "Content-Type: application/x-www-form-urlencoded",
-                "--data-raw", &format!("q={encoded_query}"),
-                "--max-time", "15",
-            ])
-            .output()
-            .await
-            .map_err(|e| {
-                xai_tool_runtime::ToolError::execution(
-                    xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                    format!("Neither python3 nor curl is available: {e}"),
-                )
-            })?;
+        
+        let mut curl_cmd = tokio::process::Command::new("curl");
+        curl_cmd.args([
+            "-s", "-L",
+            "-X", "POST",
+            "https://lite.duckduckgo.com/lite/",
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "-H", "Content-Type: application/x-www-form-urlencoded",
+            "--data-raw", &format!("q={encoded_query}"),
+            "--max-time", "15",
+        ]);
+        if let Some(ca) = ca_bundle {
+            curl_cmd.env("CURL_CA_BUNDLE", ca);
+        }
+
+        let curl_out = curl_cmd.output().await.map_err(|e| {
+            xai_tool_runtime::ToolError::execution(
+                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                format!("Neither python3 nor curl is available: {e}"),
+            )
+        })?;
 
         if !curl_out.status.success() {
             let err = String::from_utf8_lossy(&curl_out.stderr);
