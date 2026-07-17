@@ -421,12 +421,22 @@ impl WebSearchClient {
     /// Fetch the DuckDuckGo Lite HTML for `query` using python3 or curl.
     async fn fetch_ddg_html(&self, query: &str) -> Result<String, xai_tool_runtime::ToolError> {
         // Find standard CA bundle path
-        let ca_bundle = [
+        let mut ca_bundle = [
+            "/data/data/com.termux/files/usr/etc/tls/cert.pem",
             "/data/data/com.termux/files/usr/etc/tls/ca-certificates.crt",
             "/etc/ssl/certs/ca-certificates.crt",
             "/etc/pki/tls/certs/ca-bundle.crt",
             "/etc/ssl/ca-bundle.pem",
-        ].iter().find(|p| std::path::Path::new(p).exists()).copied();
+        ].iter().map(std::path::PathBuf::from).find(|p| p.exists());
+
+        if ca_bundle.is_none() {
+            if let Ok(prefix) = std::env::var("PREFIX") {
+                let p = std::path::PathBuf::from(prefix).join("etc/tls/cert.pem");
+                if p.exists() {
+                    ca_bundle = Some(p);
+                }
+            }
+        }
 
         // ── 1. Try python3 ──────────────────────────────────────────────────────
         let fusion_dir = dirs::home_dir()
@@ -440,7 +450,7 @@ impl WebSearchClient {
 
         let mut py_cmd = tokio::process::Command::new("python3");
         py_cmd.arg(&script_path).arg(query);
-        if let Some(ca) = ca_bundle {
+        if let Some(ref ca) = ca_bundle {
             py_cmd.env("SSL_CERT_FILE", ca);
         }
 
@@ -472,7 +482,7 @@ impl WebSearchClient {
             "--data-raw", &format!("q={encoded_query}"),
             "--max-time", "15",
         ]);
-        if let Some(ca) = ca_bundle {
+        if let Some(ref ca) = ca_bundle {
             curl_cmd.env("CURL_CA_BUNDLE", ca);
         }
 
