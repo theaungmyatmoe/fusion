@@ -312,13 +312,12 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<(String, String)>), xai_tool_runtime::ToolError> {
-        #[cfg(test)]
-        {
-            self.search_with_titles_responses_api(query, allowed_domains).await
-        }
-        #[cfg(not(test))]
-        {
-            self.search_duckduckgo(query, allowed_domains).await
+        match self.search_duckduckgo(query, allowed_domains.clone()).await {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                tracing::warn!("DuckDuckGo search failed ({e}), falling back to Responses API");
+                self.search_with_titles_responses_api(query, allowed_domains).await
+            }
         }
     }
 
