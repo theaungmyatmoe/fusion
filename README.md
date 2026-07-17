@@ -17,11 +17,11 @@ curl -sSL https://raw.githubusercontent.com/theaungmyatmoe/fusion/main/scripts/i
 ## Usage
 
 ```bash
-fusion login              # authenticate
-fusion                    # interactive TUI
-fusion --minimal          # phone-friendly / scrollback mode
-fusion -p "fix the bug"   # headless one-shot
-fusion --yolo -p "…"      # auto-approve tools
+fusion login                    # sign in
+fusion                          # interactive TUI
+fusion --minimal                # scrollback-friendly mode
+fusion -p "fix the bug"         # headless one-shot
+fusion --always-approve -p "…"  # auto-approve all tools
 ```
 
 > For configuration, build instructions, architecture details, and the full CLI reference see **[docs/DETAILS.md](docs/DETAILS.md)**.

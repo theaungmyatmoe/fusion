@@ -45,7 +45,7 @@ fusion --fullscreen            # force full TUI
 fusion -p "task"               # headless; print answer to stdout
 fusion --prompt-file task.md   # headless from file
 fusion -m cloudflare-kimi-k2.7 # model override
-fusion --yolo                  # always-approve tools (alias: --always-approve)
+fusion --always-approve        # auto-approve all tools
 fusion login                   # sign in / credentials
 fusion logout
 fusion --version
