@@ -85,11 +85,16 @@ elif [ -n "${PREFIX:-}" ] && printf '%s' "$PREFIX" | grep -q "com.termux"; then
         pkg install -y git ripgrep python curl ca-certificates
     fi
 
-    # Ensure duckduckgo-search Python package is installed
+    # Ensure pip and duckduckgo-search Python packages are installed
     if command -v python3 >/dev/null 2>&1; then
+        if ! command -v pip >/dev/null 2>&1 && ! command -v pip3 >/dev/null 2>&1; then
+            info "Ensuring pip is installed..."
+            python3 -m ensurepip --upgrade || true
+        fi
         if ! python3 -c "import duckduckgo_search" >/dev/null 2>&1; then
             info "Installing duckduckgo-search Python package (for captcha-free web search)..."
-            pip install --upgrade duckduckgo-search || true
+            python3 -m pip install --upgrade pip || true
+            python3 -m pip install --upgrade duckduckgo-search || true
         fi
     fi
 elif [ "$OS" = "darwin" ]; then
